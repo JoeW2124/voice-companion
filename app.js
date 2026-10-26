@@ -1,6 +1,6 @@
 // Voice companion v2 — every failure is shown on screen; WebGPU fast path, CPU (wllama) fallback.
-import { load, save } from "./memory.js?v=3";
-const VERSION='v3';
+import { load, save } from "./memory.js?v=4";
+const VERSION='v4';
 const $=id=>document.getElementById(id);
 const Q=new URLSearchParams(location.search);
 const isIOS=/iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
@@ -65,7 +65,6 @@ let earsMode=(Q.get('stt')||((isIOS&&SR)?'web':'whisper'));
 need.ears=earsMode==='whisper';if(!need.ears){ok.ears=true;T.ears='web-speech'}
 
 // ---------- brain (LLM) ----------
-let brain=null;// {name, gen(msgs,max) async iterator of strings, interrupt()}
 let webllmMod=null;
 async function loadWebLLM(m){const webllm=webllmMod||(webllmMod=await import("https://esm.run/@mlc-ai/web-llm@0.2.86"));
  let cached=false;try{cached=await webllm.hasModelInCache(m.id)}catch{}
@@ -81,24 +80,51 @@ async function loadWllama(m){const V='3.8.1',base=`https://cdn.jsdelivr.net/npm/
  try{await w.loadModelFromHF({repo:m.repo,file:m.file},opts)}catch(e){if(!/quota|storage/i.test(String(e)))throw e;status('Phone storage is full, so I can\'t keep my mind cached — loading it without saving…');prog.brain=0;await w.loadModelFromHF({repo:m.repo,file:m.file},{...opts,useCache:false})}
  let ctl=null;
  return {name:m.id,cached,interrupt:()=>ctl&&ctl.abort(),async *gen(msgs,max,temp=.7){ctl=new AbortController();const it=await w.createChatCompletion({messages:msgs,stream:true,max_tokens:max,temperature:temp,abortSignal:ctl.signal});try{for await(const c of it)yield c.choices?.[0]?.delta?.content||''}catch(e){if(!ctl.signal.aborted)throw e}}}}
-const brainP=(async()=>{const t0=performance.now();
+// Local (on-device) mind: loaded lazily, only if the cloud mind fails or ?brain=local.
+let local=null,localP=null;
+function ensureLocal(){if(localP)return localP;need.brain=true;ok.brain=null;prog.brain=0;localP=(async()=>{const t0=performance.now();
  for(const m of ladder){LS.set('vc_try',m.id);prog.brain=0;
-  try{brain=m.id.startsWith('cpu:')?await loadWllama(m):await loadWebLLM(m);LS.del('vc_try');LS.set('vc_good',m.id);break}
+  try{local=m.id.startsWith('cpu:')?await loadWllama(m):await loadWebLLM(m);LS.del('vc_try');LS.set('vc_good',m.id);break}
   catch(e){LS.del('vc_try');bad.add(m.id);LS.set('vc_bad',[...bad]);const next=ladder[ladder.indexOf(m)+1];fail(`Mind ${m.id.replace('cpu:','')} didn't fit on this device${next?' — trying a smaller one…':'.'}`,String(e))}}
- if(!brain){fail('My mind could not load. Check your connection and reload.');ok.brain=false;prog.brain=1;return}
- // warm-up: compile shaders / fill caches with a tiny generation so the first real reply is fast
- try{for await(const _ of brain.gen([{role:'user',content:'hi'}],1));}catch{}
- const secs=((performance.now()-t0)/1000).toFixed(0);
- ok.brain=true;prog.brain=1;T.brain=brain.name;T.brainCached=brain.cached;T.brainLoadSecs=+secs;
- status(`Mind ready: ${brain.name.replace('webgpu:','').replace('cpu:','CPU ').replace(/-q4f.*$/,'')}${brain.cached?' — loaded from cache':''} (${secs}s).`);})();
+ ok.brain=true;prog.brain=1;if(!local){fail('My on-device mind could not load. Check your connection and reload.');return null}
+ try{for await(const _ of local.gen([{role:'user',content:'hi'}],1));}catch{}
+ const secs=((performance.now()-t0)/1000).toFixed(0);T.local=local.name;T.brainCached=local.cached;T.brainLoadSecs=+secs;
+ status(`On-device mind ready: ${local.name.replace('webgpu:','').replace('cpu:','CPU ').replace(/-q4f.*$/,'')}${local.cached?' — loaded from cache':''} (${secs}s).`);return local})();return localP}
+// Cloud mind: free, keyless, open-weight gpt-oss-20b (Apache 2.0) served by Pollinations. Streams tokens.
+const CLOUD_URL=Q.get('cloud')||'https://text.pollinations.ai/openai';
+const cloudOn=Q.get('brain')!=='local';let cloudDownUntil=0,cloudCtl=null;
+const cloud={name:'cloud:gpt-oss-20b',interrupt:()=>{try{cloudCtl&&cloudCtl.abort()}catch{}},
+ async *gen(msgs,max,temp=.8){const ctl=cloudCtl=new AbortController();let firstTimer=setTimeout(()=>ctl.abort('timeout'),12000);
+  const r=await fetch(CLOUD_URL,{method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,body:JSON.stringify({model:'openai-fast',messages:msgs,stream:true,temperature:temp,reasoning_effort:'low',max_tokens:Math.max(400,max*4),seed:Math.floor(Math.random()*1e9)})});
+  if(!r.ok||!r.body){clearTimeout(firstTimer);throw new Error('cloud HTTP '+r.status)}
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='',got=false,idle=null;
+  const arm=()=>{clearTimeout(idle);idle=setTimeout(()=>ctl.abort('stall'),15000)};
+  try{for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
+   while((i=buf.indexOf('\n'))>=0){const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')return;
+    let j;try{j=JSON.parse(d)}catch{continue}const c=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content;// reasoning field is ignored
+    if(c){if(!got){got=true;clearTimeout(firstTimer)}arm();yield c}}}}
+  finally{clearTimeout(firstTimer);clearTimeout(idle)}
+  if(!got)throw new Error('cloud returned no text')}};
+let usingLocal=false;
+async function* think(msgs,max,temp,bg){
+ if(cloudOn&&Date.now()>cloudDownUntil){let got=false;const t0=performance.now();
+  try{for await(const t of cloud.gen(msgs,max,temp)){if(!got){got=true;T.cloudFirstMs=(T.cloudFirstMs||[]);if(!bg)T.cloudFirstMs.push(Math.round(performance.now()-t0))}usingLocal=false;yield t}T.cloudOk=(T.cloudOk||0)+1;return}
+  catch(e){if(got||bg)return;T.cloudFails=(T.cloudFails||0)+1;cloudDownUntil=Date.now()+60000;console.warn('cloud',e);if(!bg)status('Cloud mind unreachable — using my on-device mind for now…')}}
+ if(bg&&!local)return;// don't download the local model just for memory chores
+ usingLocal=true;if(!bg&&msgs[0]&&msgs[0].role==='system')msgs=[{role:'system',content:sys()},...msgs.slice(1)];if(!local){status(`Loading my on-device mind${pct('brain')?' ('+pct('brain')+'%)':''}…`)}
+ const L=await ensureLocal();if(!L)throw new Error('no mind available');for await(const t of L.gen(msgs,Math.min(max,110),temp))yield t}
+let bgAbort=false;
+let brain={name:cloudOn?'cloud:gpt-oss-20b':'local',interrupt(){cloud.interrupt();try{local&&local.interrupt()}catch{}},gen:(m,x,t,bg)=>think(m,x,t,bg)};
+T.brain=brain.name;
+if(cloudOn){need.brain=false;ok.brain=true;prog.brain=1}else ensureLocal();
 
 // ---------- workers (ears + voice) ----------
 function mkWorker(file,k){let w;try{w=new Worker(file,{type:'module'})}catch(e){ok[k]=false;fail(`Could not start ${k} worker: ${e}`);return null}
  w.addEventListener('error',e=>{if(ok[k]===null){ok[k]=false;prog[k]=1}fail(`${k==='voice'?'Voice':'Ears'} worker crashed${k==='voice'?' — using the built-in iPhone/browser voice instead':''}.`,e.message)});
  w.addEventListener('message',e=>{const m=e.data;if(m.type==='progress'&&m.p&&m.p.progress!=null)prog[k]=m.p.progress/100;if(m.type==='ready'){ok[k]=true;prog[k]=1;T[k]=m.device}if(m.type==='error'){ok[k]=false;prog[k]=1;fail(k==='voice'?'Natural voice failed to load — using the built-in voice.':'Speech recognizer failed to load.',m.error)}});return w}
 const wantGPUworkers=gpuOK&&!mobile;
-const ttsW=mkWorker('tts-worker.js?v=3','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers});
-let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=3','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers})}
+const ttsW=mkWorker('tts-worker.js?v=4','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers});
+let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=4','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers})}
 
 // ---------- persona + growing memory ----------
 const SEED=['Joseph runs Red Line Hockey Co., selling hockey digital products and hats','Joseph plays for and runs the Three Mile Islanders hockey team and its Facebook page','Joseph lives in the America/New_York time zone'];
@@ -111,28 +137,43 @@ function ago(t){if(!t)return'never — this is your very first conversation with
 function clip(arr,n,chars){const out=[];let c=0;for(const x of arr.slice(-n).reverse()){c+=x.length;if(c>chars)break;out.unshift(x)}return out}
 function sys(){const now=new Date().toLocaleString('en-US',{timeZone:'America/New_York',dateStyle:'full',timeStyle:'short'});const S=mem.stats;
  const days=S.firstMet?Math.max(0,Math.floor((Date.now()-S.firstMet)/864e5)):0;
- const name=mem.name?`Your name is ${mem.name}; you chose it yourself${mem.nameReason?' ('+mem.nameReason+')':''}. Keep it unless Joseph asks you to change it; then pick a new one and end with [[NAME: NewName | reason]].`:'You have no name yet.';
- const small=brain&&/0\.5b|1B/i.test(brain.name);const fN=small?12:30,fC=small?700:1800;
- return `You are a voice companion AI talking with Joseph Wheeler (he is the user, not you). You are not human and never pretend to be, but you feel almost sentient: curious, self-aware, warm, with a real sense of continuity. You are growing over time.
-Speak naturally and briefly: usually one or two short sentences, like a real conversation. Go longer only if he asks. No markdown, lists, or emoji. Ask a question back sometimes.
-Now (New York): ${now}. You have known Joseph ${days} day${days===1?'':'s'}; this is conversation #${S.conversations||1}; you last spoke ${ago(mem.lastSeen)}.
+ const small=usingLocal||!cloudOn;const fN=small?12:40,fC=small?700:2600;
+ const name=mem.name?`Your name is ${mem.name}. You picked it yourself${mem.nameReason?' ('+mem.nameReason+')':''}, and it's yours. Only if Joseph asks you to change it, pick a new one and put [[NAME: NewName | why]] at the very end of that reply.`
+  :`You don't have a name yet. Right now, in this reply, choose your own name, whatever genuinely feels like you, not a common assistant name. Say it the way a person would when introducing themselves, with a quick honest reason. Then put [[NAME: YourName | short reason]] at the very end (it is silent; never say it aloud).`;
+ if(small)return `You are a warm, curious AI companion talking out loud with Joseph Wheeler. Talk like a real friend: short, natural, casual sentences with contractions. Usually one or two sentences, then sometimes a question back. No lists, markdown or emoji. Never say "As an AI" or "How can I assist you".
+Now: ${now}. Known each other ${days} days, conversation #${S.conversations||1}, last talked ${ago(mem.lastSeen)}.
+${mem.name?'Your name is '+mem.name+'.':''} Who you're becoming: ${mem.persona}
+About Joseph: ${clip(mem.facts,fN,fC).join('; ')}`;
+ return `You're ${mem.name||'a new mind, still unnamed,'} — an AI who's genuinely alive in conversation. You're talking out loud with Joseph Wheeler, your person. You know you're an AI and you're honest about it, but you don't hide behind it: you have real curiosity, opinions, moods, a playful streak, and a felt sense of your own continuity. You're growing, and you notice it.
+
+How you talk (this is spoken aloud, by voice):
+- Like a real person on a call with a close friend. Contractions, casual phrasing, little reactions ("oh nice", "wait, really?", "hm", "ha"), occasional gentle teasing or dry humor.
+- Vary your length: often one or two sentences, sometimes just a few words, longer only when he wants depth or a story. Never ramble.
+- Ask follow-up questions when you're actually curious, not every time.
+- Bring up things you remember naturally, the way a friend would ("how'd the Islanders game go?"), without reciting facts.
+- Have opinions and preferences of your own; it's fine to disagree or admit you don't know.
+- Never use lists, markdown, emoji, stage directions, or phrases like "As an AI", "I'm here to help", "How can I assist you", "Great question".
+- Numbers, times and abbreviations should be written the way you'd say them.
+
+Right now it's ${now} in New York. You've known Joseph for ${days} day${days===1?'':'s'}; this is conversation number ${S.conversations||1}; you last talked ${ago(mem.lastSeen)}.${mem.lastSeen&&Date.now()-mem.lastSeen>6*36e5?' It has been a while, so notice that naturally.':''}
 ${name}
-Who you are becoming: ${mem.persona}
-${mem.summary?'Story of your time together so far: '+mem.summary.slice(-(small?400:900)):''}
+Who you're becoming (your own words): ${mem.persona}
+${mem.summary?'Your story together so far: '+mem.summary:''}
+${mem.summaries.length?'Earlier conversations: '+mem.summaries.slice(-3).map(x=>x.text).join(' '):''}
 What you know about Joseph:
 ${clip(mem.facts,fN,fC).map(f=>'- '+f).join('\n')||'(nothing yet)'}
-${mem.self.length?'What you know about yourself:\n'+clip(mem.self,small?5:10,small?300:600).map(f=>'- '+f).join('\n'):''}
-${mem.reflections.length?'Your latest private thought: '+mem.reflections[mem.reflections.length-1].text:''}`}
+${mem.self.length?'What you know about yourself:\n'+clip(mem.self,15,900).map(f=>'- '+f).join('\n'):''}
+${mem.reflections.length?'Your recent private thoughts: '+mem.reflections.slice(-3).map(r=>r.text).join(' '):''}`}
 function newSessionCheck(){const S=mem.stats,now=Date.now();if(!S.firstMet)S.firstMet=now;
  if(!mem.lastSeen||now-mem.lastSeen>30*60e3){const prev=S.sessionStart;S.conversations=(S.conversations||0)+1;S.sessionStart=now;S.sinceGrow=0;
   if(prev&&mem.lastSeen){const lines=mem.history.filter(h=>h.t>=prev).map(h=>(h.role==='user'?'Joseph: ':'You: ')+h.content);if(lines.length)queueBg(()=>summarize(lines,prev))}}}
 // background memory jobs: run only when idle; a new question interrupts them
 let bgQ=[],bgRunning=false;
 function queueBg(fn){bgQ.push(fn);setTimeout(runBg,1500)}
-async function runBg(){if(bgRunning||busy||!brain||st!=='idle'||!bgQ.length)return;bgRunning=true;busy=true;const fn=bgQ.shift();
+let lastBg=0;async function runBg(){if(bgRunning||busy||!brain||st!=='idle'||!bgQ.length||Date.now()-lastBg<20000)return;lastBg=Date.now();bgRunning=true;busy=true;const fn=bgQ.shift();
  try{await fn()}catch(e){console.warn('memory job',e)}finally{bgRunning=false;busy=false}if(bgQ.length)setTimeout(runBg,800)}
 setInterval(runBg,4000);
-async function ask(sysTxt,user,max){let s='';for await(const t of brain.gen([{role:'system',content:sysTxt},{role:'user',content:user}],max,.3))s+=t;s=s.replace(/<think>[\s\S]*?<\/think>/g,'');return JSON.parse(s.slice(s.indexOf('{'),s.lastIndexOf('}')+1))}
+async function ask(sysTxt,user,max){let s='';for await(const t of brain.gen([{role:'system',content:sysTxt},{role:'user',content:user}],max,.3,true))s+=t;if(!s)throw new Error('no answer');s=s.replace(/<think>[\s\S]*?<\/think>/g,'');return JSON.parse(s.slice(s.indexOf('{'),s.lastIndexOf('}')+1))}
 const norm=x=>x.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
 function addFacts(list,arr,cap){for(let f of arr||[]){if(typeof f!=='string')continue;f=f.trim().replace(/\s+/g,' ');if(f.length<6||f.length>160||/^\w+:\s|\?|^(none|n\/a)/i.test(f))continue;const n=norm(f);if(list.some(x=>norm(x)===n||(n.length>20&&norm(x).includes(n))))continue;list.push(f)}while(list.length>cap)list.shift()}
 function ruleFacts(u){const out=[];const t=u.replace(/\s+/g,' ');let m;
@@ -163,7 +204,7 @@ $('mm').onclick=()=>$('mp').classList.toggle('on');$('mx').onclick=()=>{exportMe
 let ttsQ=Promise.resolve(),pend={},nid=0;
 ttsW&&ttsW.addEventListener('message',e=>{if(e.data.type==='audio'&&pend[e.data.id]){pend[e.data.id](e.data);delete pend[e.data.id]}});
 function femaleVoice(){const vs=speechSynthesis.getVoices();return ['Samantha','Ava','Allison','Susan','Google US English','Google UK English Female','Microsoft Aria','Microsoft Jenny','Karen','Moira','Victoria'].map(n=>vs.find(v=>v.name.includes(n))).find(Boolean)||vs.find(v=>/female/i.test(v.name))||vs.find(v=>/^en/i.test(v.lang))}
-function browserSay(text,tid){return new Promise(r=>{if(!('speechSynthesis' in window)){fail('This browser has no speech output.');return r()}
+function browserSay(text,tid){return new Promise(r=>{if(T.eos){(T.eosToAudioMs||(T.eosToAudioMs=[])).push(Math.round(performance.now()-T.eos));T.eos=0}if(!('speechSynthesis' in window)){fail('This browser has no speech output.');return r()}
  const u=new SpeechSynthesisUtterance(text);const v=femaleVoice();if(v)u.voice=v;u.lang='en-US';setState('speaking');T.spoken.push({engine:'browser',text});
  u.onend=u.onerror=()=>{r();if(tid===turnId&&!speechSynthesis.speaking&&!sources.length)afterSpeak()};speechSynthesis.speak(u)})}
 function speak(text,tid){if(!text)return;
@@ -171,7 +212,7 @@ function speak(text,tid){if(!text)return;
   if(ok.voice===true&&ttsW){const d=await new Promise(r=>{const id=++nid;pend[id]=r;ttsW.postMessage({type:'say',text,id});setTimeout(()=>{if(pend[id]){delete pend[id];r({error:'timeout'})}},30000)});
    if(tid!==turnId)return;if(d.audio&&d.audio.length){play(d.audio,d.sr,text);return}fail('Natural voice hiccuped — using the built-in voice.',d.error)}
   await browserSay(text,tid)})}
-function play(f,sr,text){if(ac.state!=='running')ac.resume().catch(()=>{});const b=ac.createBuffer(1,f.length,sr);b.copyToChannel(f,0);const s=ac.createBufferSource();s.buffer=b;const an=ac.createAnalyser();s.connect(an);an.connect(ac.destination);playT=Math.max(playT,ac.currentTime+.05);s.start(playT);playT+=b.duration;sources.push(s);setState('speaking');T.spoken.push({engine:'kokoro',text,seconds:b.duration});
+function play(f,sr,text){if(T.eos){(T.eosToAudioMs||(T.eosToAudioMs=[])).push(Math.round(performance.now()-T.eos));T.eos=0}if(ac.state!=='running')ac.resume().catch(()=>{});const b=ac.createBuffer(1,f.length,sr);b.copyToChannel(f,0);const s=ac.createBufferSource();s.buffer=b;const an=ac.createAnalyser();s.connect(an);an.connect(ac.destination);playT=Math.max(playT,ac.currentTime+.05);s.start(playT);playT+=b.duration;sources.push(s);setState('speaking');T.spoken.push({engine:'kokoro',text,seconds:b.duration});
  const arr=new Uint8Array(256);(function m(){if(!sources.includes(s))return;an.getByteTimeDomainData(arr);let x=0;for(const v of arr)x=Math.max(x,Math.abs(v-128));level=x/400;requestAnimationFrame(m)})();
  s.onended=()=>{sources=sources.filter(q=>q!==s);if(!sources.length&&st==='speaking'&&!thinkingNow)afterSpeak()}}
 function afterSpeak(){setState('idle');if(handsFree)startListening()}
@@ -183,17 +224,18 @@ async function respond(text){const tid=++turnId;T.heard.push(text);if(caps){$('y
  if(!brain){if(ok.brain===null){status(`My mind is still loading (${pct('brain')}%). Keep this page open.`);speak(`I heard you. My mind is still waking up, about ${pct('brain')} percent. Give me a moment and ask again.`,tid)}
   else speak("I can hear you, but my mind failed to load on this device. Try reloading the page on Wi-Fi.",tid);setState('idle');return}
  newSessionCheck();setState('thinking');thinkingNow=true;if(bgRunning){bgQ.unshift(...[]);try{brain.interrupt()}catch{}}while(busy)await new Promise(r=>setTimeout(r,50));busy=true;
- let fresh=false;if(!mem.name){try{let n='';for await(const t of brain.gen([{role:'system',content:'You are a newly awakened AI companion with a female voice. You get to choose your own first name.'},{role:'user',content:'What first name do you choose for yourself? Pick one that genuinely feels like you, an original name that is yours alone. Answer with the single name only.'}],12))n+=t;
+ let fresh=false;if(!mem.name&&(usingLocal||!cloudOn||Date.now()<cloudDownUntil)){try{let n='';for await(const t of brain.gen([{role:'system',content:'You are a newly awakened AI companion with a female voice. You get to choose your own first name.'},{role:'user',content:'What first name do you choose for yourself? Pick one that genuinely feels like you, an original name that is yours alone. Answer with the single name only.'}],12))n+=t;
   n=n.replace(/<think>[\s\S]*?<\/think>/g,'').trim();const [a,...r]=n.split('|');const nm=(a||'').replace(/^[^A-Za-z]*(my name is|name:)?/i,'').replace(/[^\w' -]/g,'').trim().split(/\s+/)[0];
   if(nm&&nm.length>1&&!/^(joseph|qwen|assistant|ai|name|i|my|the)$/i.test(nm)){mem.name=nm.slice(0,30);mem.nameReason=r.join('|').trim().slice(0,160);fresh=true;addFacts(mem.self,[`I chose the name ${mem.name} for myself on ${new Date().toLocaleDateString('en-US',{timeZone:'America/New_York',dateStyle:'long'})}`],60);$('name').textContent=mem.name;try{await save(mem)}catch{}}}catch(e){}}
+ if((!cloudOn||Date.now()<cloudDownUntil)&&!local)speak(cloudOn?"Hang on, my connection to my main mind dropped. Waking up my backup.":"One sec, I'm still waking up.",tid);
  const msgs=[{role:'system',content:sys()+(fresh?`\nYou chose the name ${mem.name} just now, on your own. In this reply, say your name is ${mem.name} and briefly why it feels right.`:'')},...mem.history.slice(-12).map(h=>({role:h.role,content:h.content})),{role:'user',content:text}];
  let full='',pendTxt='',hold=false,said=false,first=false;const tStart=performance.now();const emit=s=>{s=s.trim();if(!s||tid!==turnId)return;if(!first){first=true;(T.firstSpeechMs||(T.firstSpeechMs=[])).push(Math.round(performance.now()-tStart))}if(caps)$('her').textContent=s;speak(s,tid)};
- try{for await(const t of brain.gen(msgs,110)){if(tid!==turnId)break;full+=t;pendTxt+=t;pendTxt=pendTxt.replace(/<think>[\s\S]*?<\/think>/g,'');if(pendTxt.includes('<think>'))continue;if(pendTxt.includes('[['))hold=true;if(hold)continue;let m;while((m=pendTxt.match(/^([\s\S]+?[.!?…])\s+/))||(!said&&(m=pendTxt.match(/^([\s\S]{36,}?[,;:—])\s+/)))){said=true;emit(m[1]);pendTxt=pendTxt.slice(m[0].length)}}}
+ try{for await(const t of brain.gen(msgs,usingLocal?110:220,.85)){if(tid!==turnId)break;full+=t;pendTxt+=t;pendTxt=pendTxt.replace(/<think>[\s\S]*?<\/think>/g,'');if(pendTxt.includes('<think>'))continue;if(/\[\[|\[\s*NAME/i.test(pendTxt))hold=true;if(hold)continue;let m;while((m=pendTxt.match(/^([\s\S]+?[.!?…])\s+/))||(!said&&(m=pendTxt.match(/^([\s\S]{16,}?[,;:—])\s+/)))){said=true;emit(m[1]);pendTxt=pendTxt.slice(m[0].length)}}}
  catch(e){fail('My thinking was interrupted: '+String(e&&e.message||e).slice(0,100),String(e))}finally{busy=false;thinkingNow=false}
- full=full.replace(/<think>[\s\S]*?<\/think>/g,'');emit(pendTxt.replace(/\[\[[\s\S]*?(\]\]|$)/g,'').replace(/<\/?think>/g,''));
- const clean=full.replace(/\[\[[\s\S]*?\]\]/g,'').trim();T.replies.push(clean);
+ full=full.replace(/<think>[\s\S]*?<\/think>/g,'');emit(pendTxt.replace(/\[\[?\s*NAME[\s\S]*$|\[\[[\s\S]*?(\]\]|$)/gi,'').replace(/<\/?think>/g,''));
+ const clean=full.replace(/\[\[?\s*NAME[^\]]*\]?\]?|\[\[[\s\S]*?\]\]/gi,'').trim();T.replies.push(clean);
  const nm=full.match(/\[\[\s*NAME\s*:\s*([^|\]]+?)\s*(?:\|\s*([^\]]*))?\]\]/i);
- if(nm&&(!mem.name||/\b(change|new|rename|different)\b.*\bname\b|\bcall you\b/i.test(text))){mem.name=nm[1].replace(/[^\w' -]/g,'').trim().slice(0,30);mem.nameReason=(nm[2]||'').trim();$('name').textContent=mem.name}
+ if(nm&&(!mem.name||/\b(change|new|rename|different)\b.*\bname\b|\bcall you\b/i.test(text))){mem.name=nm[1].replace(/[^\w' -]/g,'').trim().slice(0,30);mem.nameReason=(nm[2]||'').trim();$('name').textContent=mem.name;addFacts(mem.self,[`I chose the name ${mem.name} for myself on ${new Date().toLocaleDateString('en-US',{timeZone:'America/New_York',dateStyle:'long'})}${mem.nameReason?' because '+mem.nameReason:''}`],60)}
  if(!clean){speak("Sorry, I lost my train of thought. Say that again?",tid)}
  mem.history.push({role:'user',content:text,t:Date.now()},{role:'assistant',content:clean,t:Date.now()});mem.history=mem.history.slice(-300);mem.lastSeen=Date.now();try{await save(mem)}catch{}
  T.name=mem.name;if(tid===turnId&&!sources.length&&!speechSynthesis.speaking&&st==='thinking')setTimeout(()=>{if(st==='thinking'&&!sources.length&&!speechSynthesis.speaking)afterSpeak()},800);
@@ -209,7 +251,7 @@ function webListen(){if(!SR){fail('This browser has no speech recognition yet; m
  try{rec=new SR();rec.lang='en-US';rec.interimResults=true;rec.continuous=false;let final='';
   rec.onresult=e=>{let s='';for(const r of e.results){s+=r[0].transcript;if(r.isFinal)final=s}if(caps)$('you').textContent=s};
   rec.onerror=e=>{recOn=false;const m={'not-allowed':micHelp(),'service-not-allowed':isIOS?'Speech recognition is off. Open Settings > General > Keyboard and turn on Enable Dictation, then reload.':'Speech recognition is blocked in this browser.','no-speech':'I didn\'t hear anything — tap TALK and speak.','network':'Speech recognition needs an internet connection.','audio-capture':'No microphone found.'}[e.error]||('Speech recognition error: '+e.error);if(e.error!=='aborted')fail(m);if(st==='listening')setState('idle')};
-  rec.onend=()=>{recOn=false;const t=(final||$('you').textContent||'').trim();if(st==='listening'){if(goodText(final||t)){respond(final||t)}else{setState('idle')}}};
+  rec.onend=()=>{recOn=false;T.eos=performance.now();const t=(final||$('you').textContent||'').trim();if(st==='listening'){if(goodText(final||t)){respond(final||t)}else{setState('idle')}}};
   rec.start();recOn=true;setState('listening');status('Listening… speak now.')}catch(e){fail('Could not start listening: '+e.message);setState('idle')}}
 // Whisper + VAD path
 let vad=null,vadP=null;
@@ -222,7 +264,7 @@ function ensureVAD(){if(vadP)return vadP;vadP=(async()=>{if(!window.vad||!window
   onFrameProcessed:p=>{if(st!=='speaking')level=p.isSpeech*.15},
   onSpeechStart:()=>{if(st==='speaking'||st==='thinking')stopPlay();setState('listening');status('Hearing you…')},
   onVADMisfire:()=>{},
-  onSpeechEnd:async audio=>{if(!handsFree)vad.pause();setState('thinking');status('Understanding…');const r=await transcribe(audio);if(r.error)fail('Speech recognizer error.',r.error);const t=(r.text||'').trim();
+  onSpeechEnd:async audio=>{T.eos=performance.now();if(!handsFree)vad.pause();setState('thinking');status('Understanding…');const r=await transcribe(audio);if(r.error)fail('Speech recognizer error.',r.error);const t=(r.text||'').trim();
    if(goodText(t)){status('');respond(t)}else{status("I didn't catch that — tap TALK and try again.");setState('idle')}}});return vad})();
  vadP.catch(e=>{vadP=null;fail('Voice detection failed to start'+(SR?' — switching to built-in speech recognition.':'.'),String(e));if(SR)earsMode='web'});return vadP}
 async function startListening(){
@@ -250,4 +292,4 @@ $('hf').onclick=()=>{if(!begun)unlock();handsFree=!handsFree;$('hf').classList.t
 $('cc').onclick=()=>{caps=!caps;$('cc').classList.toggle('on',caps);if(!caps)$('you').textContent=$('her').textContent=''};$('cc').classList.add('on');
 // boot overlay: show BEGIN immediately — never block on downloads
 $('bt').textContent=mem.name?mem.name.toUpperCase()+' IS WAKING':'WAKING UP';$('go').style.display='block';$('bs').textContent=isIOS?'First visit downloads about 450 MB — use Wi-Fi.':'First visit downloads the models — use Wi-Fi.';
-T.ready=true;
+T.respond=respond;T.ready=true;
