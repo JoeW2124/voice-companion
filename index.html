@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#030406"><title>·</title><link rel="icon" href="data:,"><meta name="robots" content="noindex,nofollow">
+<style>
+html,body{margin:0;height:100%;background:#030406;color:#cfe9f2;font:300 13px/1.5 ui-monospace,"SF Mono",Menlo,monospace;overflow:hidden;-webkit-user-select:none;user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+#name{position:fixed;left:0;right:0;top:calc(50% + min(28vw,170px));text-align:center;letter-spacing:.6em;font-size:12px;opacity:.45;text-transform:uppercase;transition:opacity 2s}
+#state{position:fixed;top:max(18px,env(safe-area-inset-top));left:0;right:0;text-align:center;font-size:10px;letter-spacing:.4em;opacity:.35}
+#cap{position:fixed;left:8%;right:8%;bottom:calc(150px + env(safe-area-inset-bottom));text-align:center;min-height:3em}
+#you{opacity:.35;font-size:12px}#her{opacity:.8;font-family:-apple-system,"Helvetica Neue",sans-serif;font-weight:300;font-size:16px;margin-top:6px;color:#e6fbff}
+#ctl{position:fixed;bottom:calc(36px + env(safe-area-inset-bottom));left:0;right:0;display:flex;justify-content:center;align-items:center;gap:28px}
+button{background:transparent;color:#bfeaf5;border:1px solid #1f3a44;border-radius:999px;font:inherit;letter-spacing:.25em;font-size:10px;padding:10px 16px;cursor:pointer}
+#talk{width:84px;height:84px;padding:0;border-color:#3fd0ff55;box-shadow:0 0 24px #3fd0ff22 inset,0 0 18px #3fd0ff18}
+#talk.on{border-color:#7fe6ff;box-shadow:0 0 30px #3fd0ff66 inset,0 0 30px #3fd0ff44}
+button.on{border-color:#7fe6ff;color:#fff}
+#lat{position:fixed;bottom:6px;right:10px;font-size:9px;opacity:.25}
+</style></head><body>
+<canvas id=cv></canvas><div id=state>TAP TO BEGIN</div><div id=name>◦</div>
+<div id=cap><div id=you></div><div id=her></div></div>
+<div id=ctl><button id=hf>HANDS-FREE</button><button id=talk>TALK</button><button id=cc>CAPTIONS</button></div><div id=lat></div>
+<div id=boot><div id=bt>WAKING UP…</div><div id=bar><i id=bi></i></div><div id=bs></div><button id=go>BEGIN</button></div>
+<style>#boot{position:fixed;inset:0;background:#030406ee;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:9;letter-spacing:.35em;font-size:11px}#bar{width:200px;height:1px;background:#123}#bi{display:block;height:1px;width:0;background:#7fe6ff;box-shadow:0 0 8px #7fe6ff;transition:width .4s}#bs{opacity:.4;font-size:9px;letter-spacing:.15em;max-width:80vw;text-align:center}#go{display:none}</style>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>
+<script type="module" src="app.js"></script></body></html>
