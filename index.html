@@ -1,4 +1,10 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#030406"><title>·</title><link rel="icon" href="data:,"><link rel="preconnect" href="https://text.pollinations.ai" crossorigin><link rel="preconnect" href="https://api.llm7.io" crossorigin><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="preconnect" href="https://huggingface.co" crossorigin><meta name="robots" content="noindex,nofollow">
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#030406"><title>·</title><link rel="icon" href="data:,"><link rel="preconnect" href="https://text.pollinations.ai" crossorigin><link rel="preconnect" href="https://api.llm7.io" crossorigin><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="preconnect" href="https://huggingface.co" crossorigin><meta name="robots" content="noindex,nofollow"><script>(function(){var q=new URLSearchParams(location.search),r=q.get('reset');if(!r)return;window.__resetting=1;var jobs=[];
+try{localStorage.clear()}catch(e){}try{sessionStorage.clear()}catch(e){}
+if(window.caches)jobs.push(caches.keys().then(function(k){return Promise.all(k.map(function(x){return caches.delete(x)}))}));
+if(navigator.serviceWorker)jobs.push(navigator.serviceWorker.getRegistrations().then(function(a){return Promise.all(a.map(function(x){return x.unregister()}))}));
+if(r==='all'&&window.indexedDB)jobs.push(new Promise(function(ok){var d=indexedDB.deleteDatabase('companion');d.onsuccess=d.onerror=d.onblocked=function(){ok()}}));
+document.write('<p style="color:#9fdcec;font:14px -apple-system;text-align:center;margin-top:40vh">Resetting'+(r==='all'?' everything (memory too)':' cached files (memory kept)')+'…</p>');
+Promise.all(jobs.map(function(p){return p.catch(function(){})})).then(function(){q.delete('reset');location.replace(location.pathname+(q.toString()?'?'+q:''))})})()</script>
 <style>
 html,body{margin:0;height:100%;background:#030406;color:#cfe9f2;font:300 13px/1.5 ui-monospace,"SF Mono",Menlo,monospace;overflow:hidden;-webkit-user-select:none;user-select:none}
 canvas{position:fixed;inset:0;width:100%;height:100%}
@@ -19,7 +25,7 @@ button{background:rgba(255,255,255,.045);border:1px solid rgba(160,230,255,.16);
 #talk{background:rgba(120,220,255,.06)}
 body.quiet #ctl button,body.quiet #mm{opacity:.12}
 #her{text-shadow:0 0 18px #3fd0ff44}#state{color:#bfefff}
-</style></head><body>
+#ver{pointer-events:auto;cursor:pointer;padding:8px;z-index:30}#diag{display:none;position:fixed;inset:calc(40px + env(safe-area-inset-top)) 10px calc(20px + env(safe-area-inset-bottom));background:#04060ef2;border:1px solid #5fe3ff55;border-radius:14px;z-index:100;flex-direction:column;font:11px ui-monospace,Menlo,monospace;color:#cfefff}#diag.on{display:flex}#dgh{padding:10px;display:flex;justify-content:space-between;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #5fe3ff33}#dgh button{margin-left:6px;background:#5fe3ff22;color:#dffaff;border:1px solid #5fe3ff66;border-radius:12px;padding:6px 10px;font:11px -apple-system}#dgl{flex:1;overflow:auto;margin:0;padding:10px;white-space:pre-wrap;word-break:break-word;-webkit-overflow-scrolling:touch}</style></head><body>
 <canvas id=cv></canvas><div id=state>TAP TO BEGIN</div><div id=name>◦</div>
 <div id=cap><div id=you></div><div id=her></div></div>
 <div id=ctl><button id=hf>HANDS-FREE</button><button id=talk>TALK</button><button id=cc>CAPTIONS</button></div><div id=lat></div><div id=msg></div><div id=load></div><div id=ver></div><button id=mm>MEMORY</button><div id=mp><button id=mx>EXPORT</button><button id=mi>IMPORT</button><input id=mf type=file accept=".json,application/json" hidden></div>
@@ -28,5 +34,5 @@ body.quiet #ctl button,body.quiet #mm{opacity:.12}
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>
 <script>window.addEventListener('error',function(e){var m=document.getElementById('msg');if(m){m.className='err';m.textContent='Load error: '+(e.message||(e.target&&e.target.src)||'unknown')}},true);
-setTimeout(function(){if(!window.__vc||!window.__vc.ready){var m=document.getElementById('msg');if(m&&!m.textContent){m.className='err';m.textContent='Still starting… if this stays, update iOS / your browser and reload.'}}},20000);</script>
-<script type="module" src="app.js?v=5"></script></body></html>
+setTimeout(function(){if(!window.__vc||!window.__vc.ready){var m=document.getElementById('msg');if(m&&!m.textContent){m.className='err';m.textContent='Still starting… if this stays, tap v6 at the bottom-left for diagnostics, or open this page with ?reset=1.'}}},20000);</script>
+<script type="module" src="app.js?v=6"></script></body></html>

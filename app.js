@@ -1,25 +1,36 @@
 // Voice companion v2 — every failure is shown on screen; WebGPU fast path, CPU (wllama) fallback.
-import { load, save } from "./memory.js?v=5";
-const VERSION='v5';
+import { load, save } from "./memory.js?v=6";
+if(window.__resetting)throw new Error('resetting');
+const VERSION='v6';
 const $=id=>document.getElementById(id);
 const norm=x=>String(x).toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
 const Q=new URLSearchParams(location.search);
 const isIOS=/iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const mobile=isIOS||/Android|Mobi/i.test(navigator.userAgent);
-const T=window.__vc={version:VERSION,log:[],spoken:[],heard:[],replies:[],brain:null,ears:null,voice:null,errors:[]};
+const SAFE=Q.get('safe')==='1';
+const T=window.__vc={version:VERSION,diag:[],log:[],spoken:[],heard:[],replies:[],brain:null,ears:null,voice:null,errors:[]};
 // ---------- on-screen status ----------
-function status(msg){$('msg').textContent=msg||'';$('msg').className='';T.log.push(msg)}
-function fail(msg,detail){$('msg').textContent=msg;$('msg').className='err';T.errors.push(msg+(detail?' | '+detail:''));console.warn(msg,detail||'')}
+function dlog(...a){const t=new Date();const line=t.toTimeString().slice(0,8)+'.'+String(t.getMilliseconds()).padStart(3,'0')+' '+a.map(x=>typeof x==='string'?x:(x&&x.message)||JSON.stringify(x)).join(' ');T.diag.push(line.slice(0,400));if(T.diag.length>80)T.diag.shift();const b=document.getElementById('dgl');if(b&&b.offsetParent)b.textContent=T.diag.join('\n')}
+T.dlog=dlog;for(const k of ['warn','error']){const o=console[k].bind(console);console[k]=(...a)=>{try{dlog(k.toUpperCase(),...a.map(String))}catch{}o(...a)}}
+dlog('boot',VERSION,navigator.userAgent,'safe='+SAFE);
+function status(msg){$('msg').textContent=msg||'';$('msg').className='';T.log.push(msg);if(msg)dlog('status',msg)}
+function fail(msg,detail){$('msg').textContent=msg;$('msg').className='err';T.errors.push(msg+(detail?' | '+detail:''));console.warn('FAIL '+msg,detail||'')}
 window.addEventListener('error',e=>fail('Something broke: '+(e.message||e.error||'unknown error'),e.filename+':'+e.lineno));
-window.addEventListener('unhandledrejection',e=>fail('Something broke: '+(e.reason&&e.reason.message||e.reason)));
-$('ver').textContent=VERSION;
+window.addEventListener('unhandledrejection',e=>{const r=e.reason;if(r&&(r.name==='AbortError'||/abort/i.test(String(r.message||r)))){dlog('ignored abort',String(r.message||r));e.preventDefault&&e.preventDefault();return}fail('Something broke: '+(e.reason&&e.reason.message||e.reason))});
+$('ver').textContent=VERSION+(SAFE?' safe':'');
+$('ver').onclick=()=>{let d=$('diag');if(!d){d=document.createElement('div');d.id='diag';d.innerHTML='<div id=dgh>Diagnostics '+VERSION+' — screenshot or copy this<span><button id=dgc>Copy</button><button id=dgs>Safe mode</button><button id=dgx>Close</button></span></div><pre id=dgl></pre>';document.body.appendChild(d);
+ $('dgx').onclick=()=>d.classList.remove('on');$('dgs').onclick=()=>{location.href=location.pathname+'?safe=1'};
+ $('dgc').onclick=async()=>{const txt=T.diag.join('\n');try{await navigator.clipboard.writeText(txt);$('dgc').textContent='Copied'}catch{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');$('dgc').textContent='Copied'}catch{}ta.remove()}}}
+ d.classList.add('on');$('dgl').textContent=T.diag.join('\n');$('dgl').scrollTop=1e9};
 let quietT=0;const wake=()=>{document.body.classList.remove('quiet');clearTimeout(quietT);quietT=setTimeout(()=>document.body.classList.add('quiet'),6000)};['pointerdown','pointermove','keydown'].forEach(e=>addEventListener(e,wake));wake();
 let st='idle',level=0,handsFree=Q.get('hf')!=='0',caps=true,ac=null,micStream=null,turnId=0,sources=[],playT=0,mem={name:null,nameReason:null,facts:[],reflections:[],history:[],lastSeen:null};
-function setState(s){st=s;$('state').textContent={idle:handsFree?'LISTENING · HANDS-FREE':'READY — TAP TALK',listening:'LISTENING — TAP TO STOP',thinking:'THINKING',speaking:'SPEAKING — TAP TO INTERRUPT'}[s]||s;$('talk').classList.toggle('on',s!=='idle');$('talk').textContent={idle:'TALK',listening:'STOP',thinking:'…',speaking:'STOP'}[s]||'TALK'}
+function setState(s){if(s!==st)dlog('state',s);st=s;$('state').textContent={idle:handsFree?'LISTENING · HANDS-FREE':'READY — TAP TALK',listening:'LISTENING — TAP TO STOP',thinking:'THINKING',speaking:'SPEAKING — TAP TO INTERRUPT'}[s]||s;$('talk').classList.toggle('on',s!=='idle');$('talk').textContent={idle:'TALK',listening:'STOP',thinking:'…',speaking:'STOP'}[s]||'TALK'}
 // ---------- visual: cosmic neural mind (brain.js) ----------
-import { createBrain } from "./brain.js?v=5";
-const mind=createBrain($('cv'),()=>st);mind.setLevel(()=>level);
-$('cv').addEventListener('click',e=>{const n=mind.hit(e.clientX,e.clientY);if(n)T.tapped=n.label});
+import { createBrain } from "./brain.js?v=6";
+function createOrb(cv,getSt){const g=cv.getContext('2d');let lv=()=>0;const dpr=Math.min(2,devicePixelRatio||1);(function f(t){cv.width=innerWidth*dpr;cv.height=innerHeight*dpr;const x=cv.width/2,y=cv.height*.42,r=Math.min(cv.width,cv.height)*(.12+lv()*.15+(getSt()==='thinking'?.02*Math.sin(t/150):0));const gr=g.createRadialGradient(x,y,0,x,y,r*2.2);gr.addColorStop(0,'#e8fdff');gr.addColorStop(.25,'#5fe3ffcc');gr.addColorStop(1,'#0000');g.fillStyle='#02030a';g.fillRect(0,0,cv.width,cv.height);g.fillStyle=gr;g.fillRect(0,0,cv.width,cv.height);requestAnimationFrame(f)})(0);
+ return {setGraph(){},ignite(){},think(){},hit(){return null},setLevel(f){lv=f}}}
+let mind;try{if(SAFE)throw new Error('safe mode');mind=createBrain($('cv'),()=>st);dlog('galaxy ok')}catch(e){dlog('galaxy off:',String(e));mind=createOrb($('cv'),()=>st)}mind.setLevel(()=>level);
+$('cv').addEventListener('click',e=>{try{const n=mind.hit(e.clientX,e.clientY);if(n)T.tapped=n.label}catch(err){dlog('hit err',String(err))}});
 
 // ---------- loading state ----------
 const prog={brain:0,ears:0,voice:0};const ok={brain:null,ears:null,voice:null};// null=loading,true,false
@@ -29,7 +40,7 @@ function showProgress(){const parts=[];const lab={brain:'mind',ears:'ears',voice
  $('load').textContent=parts.length?'loading '+parts.join(' · '):'';const tot=(prog.brain*.75+prog.ears*.1+prog.voice*.15);$('bi').style.width=Math.round(tot*100)+'%'}
 const need={brain:true,ears:true,voice:true};
 setInterval(showProgress,500);
-try{mem=await load();if(mem.name)$('name').textContent=mem.name}catch(e){fail('Memory storage unavailable (private browsing?). I will forget this chat when you close the page.',String(e))}
+try{mem=await Promise.race([load(),new Promise((_,rj)=>setTimeout(()=>rj(new Error('IndexedDB did not answer in 4 s')),4000))]);dlog('memory loaded',mem&&mem.name||'(unnamed)');if(mem.name)$('name').textContent=mem.name}catch(e){fail('Memory storage unavailable (private browsing?). I will forget this chat when you close the page.',String(e))}
 
 // ---------- capability detection ----------
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -87,49 +98,54 @@ function ensureLocal(){if(localP)return localP;need.brain=true;ok.brain=null;pro
 // Backup: Mistral Nemo 12B (Apache 2.0) via LLM7. Both keyless with CORS. A provider that times out or rate-limits rests for a while.
 const PROVIDERS=[
  {id:'pollinations',label:'gpt-oss-20b',url:Q.get('cloud')||'https://text.pollinations.ai/openai',model:'openai-fast',extra:{reasoning_effort:'low'},first:7000,rest:0},
- {id:'llm7',label:'mistral-nemo',url:Q.get('cloud2')||'https://api.llm7.io/v1/chat/completions',model:'mistral-Nemo-Instruct-2407',extra:{},first:7000,rest:0}];
+ {id:'llm7',label:'mistral-nemo',url:Q.get('cloud2')||'https://api.llm7.io/v1/chat/completions',model:'mistral-Nemo-Instruct-2407',extra:{},first:5000,rest:0}];
 if(Q.get('prov')!=='pollinations')PROVIDERS.reverse();// fast Mistral Nemo answers; gpt-oss does the background learning
 const CLOUD_URL=PROVIDERS[0].url;
+const LLM7_PREF=['mistral-Nemo-Instruct-2407','mistral-Small-24B-Instruct-2501','gpt-oss:20b','L3-8B-Lunaris-v1-Turbo','nemotron-3-nano:30b'];let llm7Bad=new Set();
+function pickLLM7(list){const P=PROVIDERS.find(p=>p.id==='llm7');const ids=list||P.list||LLM7_PREF;const m=LLM7_PREF.find(x=>ids.includes(x)&&!llm7Bad.has(x));if(m){if(m!==P.model)dlog('llm7 model ->',m);P.model=m;return true}return false}
+async function refreshLLM7(){try{const ctl=new AbortController();setTimeout(()=>ctl.abort(),4000);const r=await fetch('https://api.llm7.io/v1/models',{signal:ctl.signal,cache:'no-store'});const j=await r.json();const ids=(j.data||j).map(m=>m.id);PROVIDERS.find(p=>p.id==='llm7').list=ids;if(!pickLLM7(ids))PROVIDERS.find(p=>p.id==='llm7').rest=Date.now()+6e5;dlog('llm7 models ok',ids.length)}catch(e){dlog('llm7 models fetch failed',String(e))}}
 const cloudOn=Q.get('brain')!=='local';let cloudDownUntil=0,cloudCtl=null,fgOn=0,cloudBusy=false,lastFgEnd=0;
 async function* provGen(P,msgs,max,temp,bg){const ctl=new AbortController();if(!bg)cloudCtl=ctl;let firstTimer=setTimeout(()=>ctl.abort('timeout'),bg?12000:P.first);
  let r;try{r=await fetch(P.url,{method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,body:JSON.stringify({model:P.model,messages:msgs,stream:true,temperature:temp,max_tokens:P.id==='llm7'?Math.round(max*1.3):Math.max(400,max*4),seed:Math.floor(Math.random()*1e9),...P.extra})})}
- catch(e){clearTimeout(firstTimer);throw new Error(P.id+' '+(ctl.signal.aborted?'timeout':'network'))}
- if(!r.ok||!r.body){clearTimeout(firstTimer);let tx='';try{tx=(await r.text()).slice(0,200)}catch{}(T.cloudErr||(T.cloudErr=[])).push(P.id+' '+r.status+' '+tx.slice(0,90));throw new Error(P.id+' HTTP '+r.status)}
+ catch(e){clearTimeout(firstTimer);dlog('cloud',P.id,ctl.signal.aborted?'timeout':'network',String(e));throw new Error(P.id+' '+(ctl.signal.aborted?'timeout':'network'))}
+ if(!r.ok||!r.body){clearTimeout(firstTimer);let tx='';try{tx=(await r.text()).slice(0,200)}catch{}if(P.id==='llm7'&&/model|unavailable|not.?found/i.test(tx)&&r.status!==429){llm7Bad.add(P.model);pickLLM7()}dlog('cloud',P.id,P.model,'HTTP',r.status,tx.slice(0,120));(T.cloudErr||(T.cloudErr=[])).push(P.id+' '+r.status+' '+tx.slice(0,90));throw new Error(P.id+' HTTP '+r.status+(P.id==='llm7'&&/model|unavailable|not.?found/i.test(tx)&&r.status!==429?' badmodel':''))}
  const rd=r.body.getReader(),dec=new TextDecoder();let buf='',got=false,idle=null;const arm=()=>{clearTimeout(idle);idle=setTimeout(()=>ctl.abort('stall'),15000)};
  try{for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
   while((i=buf.indexOf('\n'))>=0){const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')return;
    let j;try{j=JSON.parse(d)}catch{continue}const c=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content;// reasoning is ignored
    if(c){if(!got){got=true;clearTimeout(firstTimer)}arm();yield c}}}}
  catch(e){if(!got)throw new Error(P.id+' '+(ctl.signal.aborted?'timeout':'stream'));throw e}
- finally{clearTimeout(firstTimer);clearTimeout(idle);try{rd.cancel()}catch{}}
+ finally{clearTimeout(firstTimer);clearTimeout(idle);try{rd.cancel().catch(()=>{})}catch{}}
  if(!got)throw new Error(P.id+' returned no text')}
 const cloud={name:'cloud',interrupt:()=>{try{cloudCtl&&cloudCtl.abort()}catch{}},
  async *gen(msgs,max,temp=.8,bg=false){if(bg){while(fgOn||cloudBusy)await new Promise(r=>setTimeout(r,300));cloudBusy=true}else fgOn++;
-  try{let last=null;const order=bg?[...PROVIDERS].sort(a=>a.id==='pollinations'?-1:1):PROVIDERS;for(const P of order){if(Date.now()<P.rest)continue;let got=false;const t0=performance.now();
-    try{for await(const t of provGen(P,msgs,max,temp,bg)){if(!got){got=true;T.provider=P.id;if(!bg)(T.provFirst||(T.provFirst=[])).push([P.id,Math.round(performance.now()-t0)])}yield t}if(got)return}
-    catch(e){if(got)return;last=e;console.warn('cloud',e);(T.cloudErr||(T.cloudErr=[])).push(String(e.message||e));P.rest=Date.now()+(/429/.test(e.message)?20000:/timeout/.test(e.message)?40000:10000)}}
+  try{let last=null;const order=bg?[...PROVIDERS].sort(a=>a.id==='pollinations'?-1:1):[...PROVIDERS];let retried=false;const allRest=order.every(q=>Date.now()<q.rest);for(const P of order){if(Date.now()<P.rest&&(bg||!allRest))continue;let got=false;const t0=performance.now();
+    try{for await(const t of provGen(P,msgs,max,temp,bg)){if(!got){got=true;T.provider=P.id;if(!bg)dlog('cloud first token',P.id,P.model,Math.round(performance.now()-t0)+'ms');if(!bg)(T.provFirst||(T.provFirst=[])).push([P.id,Math.round(performance.now()-t0)])}yield t}if(got)return}
+    catch(e){if(got)return;last=e;if(/badmodel/.test(e.message)&&!retried&&!llm7Bad.has(P.model)){retried=true;order.splice(order.indexOf(P)+1,0,P);continue}console.warn('cloud',e);(T.cloudErr||(T.cloudErr=[])).push(String(e.message||e));P.rest=Date.now()+(/429/.test(e.message)?20000:/timeout/.test(e.message)?40000:10000)}}
    throw last||new Error('all cloud minds resting')}
   finally{if(bg)cloudBusy=false;else{fgOn--;lastFgEnd=Date.now()}}}};
-let usingLocal=false;
+let usingLocal=false;const allowLocal=Q.get('local')==='1'||!(isIOS||SAFE);
 async function* think(msgs,max,temp,bg){
  if(cloudOn&&Date.now()>cloudDownUntil){let got=false;const t0=performance.now();
   try{for await(const t of cloud.gen(msgs,max,temp,bg)){if(!got){got=true;T.cloudFirstMs=(T.cloudFirstMs||[]);if(!bg)T.cloudFirstMs.push(Math.round(performance.now()-t0))}usingLocal=false;yield t}T.cloudOk=(T.cloudOk||0)+1;return}
-  catch(e){if(got)return;if(bg)throw e;T.cloudFails=(T.cloudFails||0)+1;cloudDownUntil=Date.now()+20000;if(!bg)status('Cloud minds unreachable — using my on-device mind for now…')}}
+  catch(e){if(got)return;if(bg)throw e;T.cloudFails=(T.cloudFails||0)+1;cloudDownUntil=Date.now()+20000;if(!bg)status(allowLocal?'Cloud minds unreachable — using my on-device mind for now…':'Cloud minds unreachable — check your connection.')}}
+ if(!allowLocal){if(bg)return;dlog('all cloud minds failed; no local mind on this device');yield "Sorry, my mind just blipped. The connection dropped. Say that again?";return}
  if(bg&&!local)return;// don't download the local model just for memory chores
  usingLocal=true;if(!bg&&msgs[0]&&msgs[0].role==='system')msgs=[{role:'system',content:sys()},...msgs.slice(1)];if(!local){status(`Loading my on-device mind${pct('brain')?' ('+pct('brain')+'%)':''}…`)}
  const L=await ensureLocal();if(!L)throw new Error('no mind available');for await(const t of L.gen(msgs,Math.min(max,110),temp))yield t}
 let bgAbort=false;
 let brain={name:cloudOn?'cloud:gpt-oss-20b+mistral-nemo':'local',interrupt(){cloud.interrupt();try{local&&local.interrupt()}catch{}},gen:(m,x,t,bg)=>think(m,x,t,bg)};
 T.brain=brain.name;
-if(cloudOn){need.brain=false;ok.brain=true;prog.brain=1}else ensureLocal();
+if(cloudOn){need.brain=false;ok.brain=true;prog.brain=1;refreshLLM7()}else ensureLocal();
 
 // ---------- workers (ears + voice) ----------
 function mkWorker(file,k){let w;try{w=new Worker(file,{type:'module'})}catch(e){ok[k]=false;fail(`Could not start ${k} worker: ${e}`);return null}
  w.addEventListener('error',e=>{if(ok[k]===null){ok[k]=false;prog[k]=1}fail(`${k==='voice'?'Voice':'Ears'} worker crashed${k==='voice'?' — using the built-in iPhone/browser voice instead':''}.`,e.message)});
  w.addEventListener('message',e=>{const m=e.data;if(m.type==='progress'&&m.p&&m.p.progress!=null)prog[k]=m.p.progress/100;if(m.type==='ready'){ok[k]=true;prog[k]=1;T[k]=m.device}if(m.type==='error'){ok[k]=false;prog[k]=1;fail(k==='voice'?'Natural voice failed to load — using the built-in voice.':'Speech recognizer failed to load.',m.error)}});return w}
 const wantGPUworkers=gpuOK&&!mobile;
-const ttsW=mkWorker('tts-worker.js?v=5','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers});
-let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=5','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers})}
+const voiceMode=Q.get('voice')||((isIOS||SAFE)?'native':'kokoro');T.voiceMode=voiceMode;dlog('voice mode',voiceMode,'ears',earsMode);
+let ttsW=null;if(voiceMode==='kokoro'){ttsW=mkWorker('tts-worker.js?v=6','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers})}else{need.voice=false;ok.voice=false;prog.voice=1}
+let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=6','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers})}
 
 // ---------- persona + growing memory ----------
 const SEED=['Joseph runs Red Line Hockey Co., selling hockey digital products and hats','Joseph plays for and runs the Three Mile Islanders hockey team and its Facebook page','Joseph lives in the America/New_York time zone'];
@@ -138,7 +154,7 @@ function migrate(m){m=m||{};m.name=m.name||null;m.nameReason=m.nameReason||null;
  m.stats=m.stats||{firstMet:m.history[0]?.t||null,conversations:m.history.length?1:0,exchanges:Math.floor(m.history.length/2),sessionStart:m.lastSeen||null};
  m.graph=m.graph||{nodes:[],links:[],next:1};m.changes=m.changes||[];if(!m.graph.nodes.some(n=>n.kind==='core'))m.graph.nodes.unshift({id:0,label:'me',kind:'core',t:Date.now(),w:3});
  if(!m.seeded){for(const f of SEED)if(!m.facts.includes(f))m.facts.push(f);m.seeded=true}return m}
-mem=migrate(mem);
+try{mem=migrate(mem)}catch(e){dlog('migrate failed, starting fresh memory',String(e));mem=migrate({})}
 // ---------- concept graph: every learning event is a node linked to related nodes ----------
 const words=x=>new Set(norm(x).split(' ').filter(w=>w.length>3&&!STOP.has(w)));
 const STOP=new Set('joseph about with that this have from they them their what when your just like really been were will would into also than then very more some much does doesnt dont thats theres'.split(' '));
@@ -150,7 +166,7 @@ function addConcept(label,kind='fact',hint=[],live=true){if(!label||typeof label
  for(const r of n.links)G.links.push([r,n.id,Date.now()]);if(G.nodes.length>400){const old=G.nodes.splice(1,1)[0];G.links=G.links.filter(l=>l[0]!==old.id&&l[1]!==old.id)}
  if(live)mind.ignite(n);T.concepts=G.nodes.length-1;return n}
 const KINDS=['fact','self','opinion','emotion','theme','joke'];
-if(mem.graph.nodes.length<2){for(const f of mem.facts)addConcept(f,'fact',[],false);for(const f of mem.self)addConcept(f,'self',[],false)}
+try{if(mem.graph.nodes.length<2){for(const f of mem.facts)addConcept(String(f),'fact',[],false);for(const f of mem.self)addConcept(String(f),'self',[],false)}}catch(e){dlog('graph seed failed',String(e));mem.graph={nodes:[{id:0,label:'me',kind:'core',t:Date.now(),w:3}],links:[],next:1}}
 mind.setGraph(mem.graph);T.concepts=mem.graph.nodes.length-1;T.addConcept=(l,k)=>addConcept(l,k);
 function ago(t){if(!t)return'never — this is your very first conversation with him';const h=(Date.now()-t)/36e5;return h<1?Math.round(h*60)+' minutes ago':h<48?Math.round(h)+' hours ago':Math.round(h/24)+' days ago'}
 function clip(arr,n,chars){const out=[];let c=0;for(const x of arr.slice(-n).reverse()){c+=x.length;if(c>chars)break;out.unshift(x)}return out}
@@ -245,21 +261,25 @@ ttsW&&ttsW.addEventListener('message',e=>{if(e.data.type==='audio'&&pend[e.data.
 function femaleVoice(){const vs=speechSynthesis.getVoices();return ['Samantha','Ava','Allison','Susan','Google US English','Google UK English Female','Microsoft Aria','Microsoft Jenny','Karen','Moira','Victoria'].map(n=>vs.find(v=>v.name.includes(n))).find(Boolean)||vs.find(v=>/female/i.test(v.name))||vs.find(v=>/^en/i.test(v.lang))}
 function browserSay(text,tid){return new Promise(r=>{if(T.eos){(T.eosToAudioMs||(T.eosToAudioMs=[])).push(Math.round(performance.now()-T.eos));T.eos=0}if(!('speechSynthesis' in window)){fail('This browser has no speech output.');return r()}
  const u=new SpeechSynthesisUtterance(text);const v=femaleVoice();if(v)u.voice=v;u.lang='en-US';setState('speaking');T.spoken.push({engine:'browser',text});
- u.onend=u.onerror=()=>{r();if(tid===turnId&&!speechSynthesis.speaking&&!sources.length)afterSpeak()};speechSynthesis.speak(u)})}
-function speak(text,tid){if(!text)return;
- ttsQ=ttsQ.then(async()=>{if(tid!==turnId)return;
+ let done=false;const fin=why=>{if(done)return;done=true;clearTimeout(wd);if(why!=='end')dlog('speech out',why);r();setTimeout(()=>{if(tid===turnId&&!thinkingNow&&sayPending===0&&!sources.length&&st==='speaking')afterSpeak()},60)};
+ const wd=setTimeout(()=>{try{if(!speechSynthesis.speaking)speechSynthesis.cancel()}catch{}fin('watchdog')},3500+text.length*90);
+ u.onend=()=>fin('end');u.onerror=e=>fin('error '+(e&&e.error));u.onstart=()=>{T.ttsStarted=(T.ttsStarted||0)+1};lvlFake(u);
+ try{speechSynthesis.resume()}catch{}speechSynthesis.speak(u)})}
+function lvlFake(u){let on=true;u.addEventListener('end',()=>{on=false;level=0});(function f(){if(!on)return;level=st==='speaking'?.12+Math.random()*.18:0;setTimeout(f,90)})()}
+let sayPending=0;function speak(text,tid){if(!text)return;sayPending++;
+ ttsQ=ttsQ.then(async()=>{try{if(tid!==turnId)return;
   if(ok.voice===true&&ttsW){const d=await new Promise(r=>{const id=++nid;pend[id]=r;ttsW.postMessage({type:'say',text,id});setTimeout(()=>{if(pend[id]){delete pend[id];r({error:'timeout'})}},30000)});
    if(tid!==turnId)return;if(d.audio&&d.audio.length){play(d.audio,d.sr,text);return}fail('Natural voice hiccuped — using the built-in voice.',d.error)}
-  await browserSay(text,tid)})}
+  await browserSay(text,tid)}finally{sayPending--}})}
 function play(f,sr,text){if(T.eos){(T.eosToAudioMs||(T.eosToAudioMs=[])).push(Math.round(performance.now()-T.eos));T.eos=0}if(ac.state!=='running')ac.resume().catch(()=>{});const b=ac.createBuffer(1,f.length,sr);b.copyToChannel(f,0);const s=ac.createBufferSource();s.buffer=b;const an=ac.createAnalyser();s.connect(an);an.connect(ac.destination);playT=Math.max(playT,ac.currentTime+.05);s.start(playT);playT+=b.duration;sources.push(s);setState('speaking');T.spoken.push({engine:'kokoro',text,seconds:b.duration});
  const arr=new Uint8Array(256);(function m(){if(!sources.includes(s))return;an.getByteTimeDomainData(arr);let x=0;for(const v of arr)x=Math.max(x,Math.abs(v-128));level=x/400;requestAnimationFrame(m)})();
  s.onended=()=>{sources=sources.filter(q=>q!==s);if(!sources.length&&st==='speaking'&&!thinkingNow)afterSpeak()}}
-function afterSpeak(){setState('idle');if(handsFree)startListening()}
+function afterSpeak(){setState('idle');if(handsFree){autoStart=true;setTimeout(()=>{if(st==='idle')startListening()},iosEars?350:0)}}
 function stopPlay(){turnId++;for(const s of sources)try{s.stop()}catch{}sources=[];playT=0;try{speechSynthesis.cancel()}catch{}try{brain&&brain.interrupt()}catch{}ttsQ=Promise.resolve()}
 
 // ---------- think ----------
 let busy=false,thinkingNow=false;
-async function respond(text){const tid=++turnId;T.heard.push(text);if(caps){$('you').textContent=text;$('her').textContent=''}
+async function respond(text){if(iosEars){try{rec&&recOn&&rec.abort()}catch{}recOn=false}dlog('respond',text.slice(0,80));const tid=++turnId;T.heard.push(text);if(caps){$('you').textContent=text;$('her').textContent=''}
  if(!brain){if(ok.brain===null){status(`My mind is still loading (${pct('brain')}%). Keep this page open.`);speak(`I heard you. My mind is still waking up, about ${pct('brain')} percent. Give me a moment and ask again.`,tid)}
   else speak("I can hear you, but my mind failed to load on this device. Try reloading the page on Wi-Fi.",tid);setState('idle');return}
  newSessionCheck();setState('thinking');mind.think(relate(text));maybeAck(tid);thinkingNow=true;if(bgRunning&&usingLocal){try{local&&local.interrupt()}catch{}}while(busy)await new Promise(r=>setTimeout(r,50));busy=true;
@@ -270,7 +290,7 @@ async function respond(text){const tid=++turnId;T.heard.push(text);if(caps){$('y
  const msgs=[{role:'system',content:sys()+(fresh?`\nYou chose the name ${mem.name} just now, on your own. In this reply, say your name is ${mem.name} and briefly why it feels right.`:'')},...mem.history.slice(-12).map(h=>({role:h.role,content:h.content})),{role:'user',content:text}];
  let full='',pendTxt='',hold=false,said=false,first=false;const tStart=performance.now();const emit=s=>{s=deAssist(s.trim());if(!s||tid!==turnId)return;if(!first){first=true;(T.firstSpeechMs||(T.firstSpeechMs=[])).push(Math.round(performance.now()-tStart))}if(caps)$('her').textContent=s;speak(s,tid)};
  try{for await(const t of brain.gen(msgs,usingLocal?110:110,.75)){if(tid!==turnId)break;full+=t;pendTxt+=t;pendTxt=pendTxt.replace(/<think>[\s\S]*?<\/think>/g,'');if(pendTxt.includes('<think>'))continue;if(/\[\[|\[\s*NAME/i.test(pendTxt))hold=true;if(hold)continue;let m;while((m=pendTxt.match(/^([\s\S]+?[.!?…])\s+/))||(!said&&(m=pendTxt.match(/^([\s\S]{20,}?[,;:—])\s+/)))){said=true;emit(m[1]);pendTxt=pendTxt.slice(m[0].length)}}}
- catch(e){fail('My thinking was interrupted: '+String(e&&e.message||e).slice(0,100),String(e))}finally{busy=false;thinkingNow=false}
+ catch(e){fail('My thinking was interrupted: '+String(e&&e.message||e).slice(0,100),String(e))}finally{busy=false;thinkingNow=false;const _t=turnId;setTimeout(()=>{if(_t===turnId&&sayPending===0&&!sources.length&&!speechSynthesis.speaking&&st==='speaking')afterSpeak()},120)}
  full=full.replace(/<think>[\s\S]*?<\/think>/g,'');emit(pendTxt.replace(/\[\[?\s*NAME[\s\S]*$|\[\[[\s\S]*?(\]\]|$)/gi,'').replace(/<\/?think>/g,''));
  const clean=deAssist(full.replace(/\[\[?\s*NAME[^\]]*\]?\]?|\[\[[\s\S]*?\]\]/gi,'').trim());T.replies.push(clean);
  const nm=full.match(/\[\[\s*NAME\s*:\s*([^|\]]+?)\s*(?:\|\s*([^\]]*))?\]\]/i);
@@ -291,19 +311,20 @@ function goodText(t){return t&&t.length>1&&!/^\[.*\]$/.test(t)&&!/^\(.*\)$/.test
 let rec=null,recOn=false;
 // Fast endpointing: speculative reply after ~350 ms of silence, end of turn at ~650 ms. If he keeps talking, the speculative reply is cancelled.
 let specText='',specT=0,endT=0;
+let noSpeech=0,autoStart=false;const iosEars=isIOS||SAFE;
 function webListen(){if(!SR){fail('This browser has no speech recognition yet; my ears are still loading ('+pct('ears')+'%).');setState('idle');return}
- try{rec=new SR();rec.lang='en-US';rec.interimResults=true;rec.continuous=true;let cur='',lastRes=0;specText='';
-  const commit=final=>{clearTimeout(specT);clearTimeout(endT);try{rec.stop()}catch{}if(!goodText(cur))return;
+ try{try{rec&&rec.abort()}catch{}rec=new SR();rec.lang='en-US';rec.interimResults=true;rec.continuous=!iosEars;dlog('listen start (web speech)',iosEars?'ios':'continuous');let cur='',lastRes=0,committed=false;specText='';
+  const commit=final=>{clearTimeout(specT);clearTimeout(endT);try{iosEars?rec.abort():rec.stop()}catch{}recOn=false;if(!goodText(cur))return;dlog('heard',cur);committed=true;
    if(specText===cur){T.specHits=(T.specHits||0)+1;return}// speculative reply already running with the same words
    T.eos=lastRes;respond(cur)};
   rec.onresult=e=>{let s='';for(const r of e.results)s+=r[0].transcript;s=s.trim();if(!s)return;if(caps)$('you').textContent=s;
    if(specText&&s!==specText){T.specMiss=(T.specMiss||0)+1;stopPlay();specText='';setState('listening')}
-   cur=s;lastRes=performance.now();clearTimeout(specT);clearTimeout(endT);
-   specT=setTimeout(()=>{if(goodText(cur)&&st==='listening'){specText=cur;T.eos=lastRes;respond(cur)}},350);
-   endT=setTimeout(()=>commit(),650)};
-  rec.onerror=e=>{recOn=false;const m={'not-allowed':micHelp(),'service-not-allowed':isIOS?'Speech recognition is off. Open Settings > General > Keyboard and turn on Enable Dictation, then reload.':'Speech recognition is blocked in this browser.','network':'Speech recognition needs an internet connection.','audio-capture':'No microphone found.'}[e.error];if(m)fail(m);if(st==='listening'&&!specText)setState('idle')};
-  rec.onend=()=>{recOn=false;if(st==='listening'){if(goodText(cur)&&!specText){T.eos=lastRes||performance.now();respond(cur)}else if(!specText){setState('idle');if(handsFree&&begun)setTimeout(()=>{if(st==='idle')startListening()},250)}}};
-  rec.start();recOn=true;setState('listening');status('')}catch(e){fail('Could not start listening: '+e.message);setState('idle')}}
+   cur=s;lastRes=performance.now();noSpeech=0;clearTimeout(specT);clearTimeout(endT);
+   specT=setTimeout(()=>{if(!iosEars&&goodText(cur)&&st==='listening'){specText=cur;T.eos=lastRes;respond(cur)}},350);
+   endT=setTimeout(()=>commit(),iosEars?1000:650)};
+  rec.onerror=e=>{recOn=false;dlog('recognition error',e.error,e.message||'');if((e.error==='no-speech'||e.error==='aborted')&&handsFree&&begun&&st==='listening'&&!committed&&++noSpeech<4){setTimeout(()=>{if(st==='listening'||st==='idle')webListen()},300);return}if(e.error==='not-allowed'&&autoStart){status('Tap TALK when you want to talk.');setState('idle');return}const m={'not-allowed':micHelp(),'service-not-allowed':isIOS?'Speech recognition is off. Open Settings > General > Keyboard and turn on Enable Dictation, then reload.':'Speech recognition is blocked in this browser.','network':'Speech recognition needs an internet connection.','audio-capture':'No microphone found.'}[e.error];if(m)fail(m);if(st==='listening'&&!specText)setState('idle')};
+  rec.onend=()=>{recOn=false;if(committed)return;if(st==='listening'){if(goodText(cur)&&!specText){T.eos=lastRes||performance.now();respond(cur)}else if(!specText){setState('idle');if(handsFree&&begun)setTimeout(()=>{if(st==='idle')startListening()},250)}}};
+  rec.start();recOn=true;autoStart=false;setState('listening');status('')}catch(e){fail('Could not start listening: '+e.message);setState('idle')}}
 // Whisper + VAD path
 let vad=null,vadP=null;
 function ensureVAD(){if(vadP)return vadP;vadP=(async()=>{if(!window.vad||!window.vad.MicVAD)throw new Error('voice-activity library did not load');
@@ -329,11 +350,11 @@ function micHelp(){return isIOS?'Microphone blocked. Tap the aA icon in the addr
 // ---------- first tap: unlock audio + mic (must be synchronous inside the gesture on iOS) ----------
 let begun=false;
 function unlock(){if(begun)return;begun=true;
- try{const AC=window.AudioContext||window.webkitAudioContext;ac=new AC();ac.resume();const b=ac.createBuffer(1,1,22050);const s=ac.createBufferSource();s.buffer=b;s.connect(ac.destination);s.start(0)}catch(e){fail('Audio could not start: '+e.message)}
+ dlog('BEGIN tapped');if(voiceMode==='kokoro')try{const AC=window.AudioContext||window.webkitAudioContext;ac=new AC();ac.resume();const b=ac.createBuffer(1,1,22050);const s=ac.createBufferSource();s.buffer=b;s.connect(ac.destination);s.start(0)}catch(e){fail('Audio could not start: '+e.message)}
  try{if('speechSynthesis' in window){const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}}catch{}
  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){fail(location.protocol!=='https:'?'Microphone needs a secure (https) page.':'This browser cannot use the microphone.');}
  else if(earsMode!=='web'){navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(s=>{micStream=s;status('Microphone on.')}).catch(e=>fail(e.name==='NotAllowedError'?micHelp():e.name==='NotFoundError'?'No microphone found on this device.':'Microphone error: '+e.message,String(e)))}
- warm();$('boot').style.display='none';setState('idle');if(handsFree)setTimeout(()=>startListening(),400);status(ok.brain?'':'Still waking up — you can tap TALK anytime.')}
+ warm();$('boot').style.display='none';setState('idle');if(handsFree){if(iosEars&&earsMode==='web')webListen();else setTimeout(()=>startListening(),400)}status(ok.brain?'':'Still waking up — you can tap TALK anytime.')}
 $('go').onclick=()=>unlock();
 // pre-warm the cloud connection and keep it alive; pre-synthesize a soft acknowledgement
 function warm(){if(!cloudOn)return;const ping=()=>{for(const u of ['https://text.pollinations.ai/models','https://api.llm7.io/v1/models'])fetch(u,{cache:'no-store'}).catch(()=>{})};ping();setInterval(()=>{if(document.visibilityState==='visible')ping()},40000)}
