@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#030406"><title>·</title><link rel="icon" href="data:,"><meta name="robots" content="noindex,nofollow">
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#030406"><title>·</title><link rel="icon" href="data:,"><link rel="preconnect" href="https://text.pollinations.ai" crossorigin><link rel="preconnect" href="https://api.llm7.io" crossorigin><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="preconnect" href="https://huggingface.co" crossorigin><meta name="robots" content="noindex,nofollow">
 <style>
 html,body{margin:0;height:100%;background:#030406;color:#cfe9f2;font:300 13px/1.5 ui-monospace,"SF Mono",Menlo,monospace;overflow:hidden;-webkit-user-select:none;user-select:none}
 canvas{position:fixed;inset:0;width:100%;height:100%}
@@ -12,6 +12,13 @@ button{background:transparent;color:#bfeaf5;border:1px solid #1f3a44;border-radi
 #talk.on{border-color:#7fe6ff;box-shadow:0 0 30px #3fd0ff66 inset,0 0 30px #3fd0ff44}
 button.on{border-color:#7fe6ff;color:#fff}
 #msg{position:fixed;left:18%;right:18%;top:calc(44px + env(safe-area-inset-top));text-align:center;font-size:12px;color:#9fdcec;z-index:10;font-family:-apple-system,sans-serif}#msg.err{color:#ffb4a8}#load{position:fixed;left:0;right:0;bottom:calc(10px + env(safe-area-inset-bottom));text-align:center;font-size:10px;opacity:.5;letter-spacing:.15em}#ver{position:fixed;bottom:6px;left:10px;font-size:9px;opacity:.3}#mm{position:fixed;top:max(12px,env(safe-area-inset-top));right:10px;font-size:8px;padding:6px 9px;opacity:.5;z-index:11}#mp{position:fixed;top:calc(max(12px,env(safe-area-inset-top)) + 34px);right:10px;display:none;flex-direction:column;gap:6px;z-index:11}#mp.on{display:flex}#mp button{font-size:9px;padding:8px 12px;background:#030406}#lat{position:fixed;bottom:6px;right:10px;font-size:9px;opacity:.25}
+
+body{background:#02030a}
+#name{font-family:-apple-system,"Helvetica Neue",sans-serif;font-weight:200;letter-spacing:.8em;font-size:13px;opacity:.75;color:#dffaff;text-shadow:0 0 12px #5fe3ff,0 0 28px #7a5cff88;top:auto;bottom:calc(210px + env(safe-area-inset-bottom))}
+button{background:rgba(255,255,255,.045);border:1px solid rgba(160,230,255,.16);-webkit-backdrop-filter:blur(14px) saturate(140%);backdrop-filter:blur(14px) saturate(140%);color:#d8f6ff;transition:opacity 1.2s,border-color .4s,box-shadow .4s}
+#talk{background:rgba(120,220,255,.06)}
+body.quiet #ctl button,body.quiet #mm{opacity:.12}
+#her{text-shadow:0 0 18px #3fd0ff44}#state{color:#bfefff}
 </style></head><body>
 <canvas id=cv></canvas><div id=state>TAP TO BEGIN</div><div id=name>◦</div>
 <div id=cap><div id=you></div><div id=her></div></div>
@@ -22,4 +29,4 @@ button.on{border-color:#7fe6ff;color:#fff}
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/bundle.min.js"></script>
 <script>window.addEventListener('error',function(e){var m=document.getElementById('msg');if(m){m.className='err';m.textContent='Load error: '+(e.message||(e.target&&e.target.src)||'unknown')}},true);
 setTimeout(function(){if(!window.__vc||!window.__vc.ready){var m=document.getElementById('msg');if(m&&!m.textContent){m.className='err';m.textContent='Still starting… if this stays, update iOS / your browser and reload.'}}},20000);</script>
-<script type="module" src="app.js?v=4"></script></body></html>
+<script type="module" src="app.js?v=5"></script></body></html>
