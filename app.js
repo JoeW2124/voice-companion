@@ -1,7 +1,7 @@
 // Voice companion v2 — every failure is shown on screen; WebGPU fast path, CPU (wllama) fallback.
-import { load, save } from "./memory.js?v=6";
+import { load, save } from "./memory.js?v=7";
 if(window.__resetting)throw new Error('resetting');
-const VERSION='v6';
+const VERSION='v7';
 const $=id=>document.getElementById(id);
 const norm=x=>String(x).toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
 const Q=new URLSearchParams(location.search);
@@ -18,15 +18,15 @@ function fail(msg,detail){$('msg').textContent=msg;$('msg').className='err';T.er
 window.addEventListener('error',e=>fail('Something broke: '+(e.message||e.error||'unknown error'),e.filename+':'+e.lineno));
 window.addEventListener('unhandledrejection',e=>{const r=e.reason;if(r&&(r.name==='AbortError'||/abort/i.test(String(r.message||r)))){dlog('ignored abort',String(r.message||r));e.preventDefault&&e.preventDefault();return}fail('Something broke: '+(e.reason&&e.reason.message||e.reason))});
 $('ver').textContent=VERSION+(SAFE?' safe':'');
-$('ver').onclick=()=>{let d=$('diag');if(!d){d=document.createElement('div');d.id='diag';d.innerHTML='<div id=dgh>Diagnostics '+VERSION+' — screenshot or copy this<span><button id=dgc>Copy</button><button id=dgs>Safe mode</button><button id=dgx>Close</button></span></div><pre id=dgl></pre>';document.body.appendChild(d);
- $('dgx').onclick=()=>d.classList.remove('on');$('dgs').onclick=()=>{location.href=location.pathname+'?safe=1'};
+$('ver').onclick=()=>{let d=$('diag');if(!d){d=document.createElement('div');d.id='diag';d.innerHTML='<div id=dgh>Diagnostics '+VERSION+' — screenshot or copy this<span><button id=dgc>Copy</button><button id=dgx>Close</button></span></div><pre id=dgl></pre>';document.body.appendChild(d);
+ $('dgx').onclick=()=>d.classList.remove('on');
  $('dgc').onclick=async()=>{const txt=T.diag.join('\n');try{await navigator.clipboard.writeText(txt);$('dgc').textContent='Copied'}catch{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');$('dgc').textContent='Copied'}catch{}ta.remove()}}}
  d.classList.add('on');$('dgl').textContent=T.diag.join('\n');$('dgl').scrollTop=1e9};
 let quietT=0;const wake=()=>{document.body.classList.remove('quiet');clearTimeout(quietT);quietT=setTimeout(()=>document.body.classList.add('quiet'),6000)};['pointerdown','pointermove','keydown'].forEach(e=>addEventListener(e,wake));wake();
 let st='idle',level=0,handsFree=Q.get('hf')!=='0',caps=true,ac=null,micStream=null,turnId=0,sources=[],playT=0,mem={name:null,nameReason:null,facts:[],reflections:[],history:[],lastSeen:null};
 function setState(s){if(s!==st)dlog('state',s);st=s;$('state').textContent={idle:handsFree?'LISTENING · HANDS-FREE':'READY — TAP TALK',listening:'LISTENING — TAP TO STOP',thinking:'THINKING',speaking:'SPEAKING — TAP TO INTERRUPT'}[s]||s;$('talk').classList.toggle('on',s!=='idle');$('talk').textContent={idle:'TALK',listening:'STOP',thinking:'…',speaking:'STOP'}[s]||'TALK'}
 // ---------- visual: cosmic neural mind (brain.js) ----------
-import { createBrain } from "./brain.js?v=6";
+import { createBrain } from "./brain.js?v=7";
 function createOrb(cv,getSt){const g=cv.getContext('2d');let lv=()=>0;const dpr=Math.min(2,devicePixelRatio||1);(function f(t){cv.width=innerWidth*dpr;cv.height=innerHeight*dpr;const x=cv.width/2,y=cv.height*.42,r=Math.min(cv.width,cv.height)*(.12+lv()*.15+(getSt()==='thinking'?.02*Math.sin(t/150):0));const gr=g.createRadialGradient(x,y,0,x,y,r*2.2);gr.addColorStop(0,'#e8fdff');gr.addColorStop(.25,'#5fe3ffcc');gr.addColorStop(1,'#0000');g.fillStyle='#02030a';g.fillRect(0,0,cv.width,cv.height);g.fillStyle=gr;g.fillRect(0,0,cv.width,cv.height);requestAnimationFrame(f)})(0);
  return {setGraph(){},ignite(){},think(){},hit(){return null},setLevel(f){lv=f}}}
 let mind;try{if(SAFE)throw new Error('safe mode');mind=createBrain($('cv'),()=>st);dlog('galaxy ok')}catch(e){dlog('galaxy off:',String(e));mind=createOrb($('cv'),()=>st)}mind.setLevel(()=>level);
@@ -65,7 +65,7 @@ const ladder=(()=>{const q=f16?'q4f16_1':'q4f32_1';let L=[];
  return L})();
 T.ladder=ladder.map(m=>m.id);
 // Ears: on iPhone use Safari's built-in recognition (no download). Elsewhere whisper (+ VAD), Web Speech as fallback.
-let earsMode=(Q.get('stt')||((isIOS&&SR)?'web':'whisper'));
+let earsMode=Q.get('stt')==='web'&&SR?'web':'whisper';
 need.ears=earsMode==='whisper';if(!need.ears){ok.ears=true;T.ears='web-speech'}
 
 // ---------- brain (LLM) ----------
@@ -105,7 +105,7 @@ const LLM7_PREF=['mistral-Nemo-Instruct-2407','mistral-Small-24B-Instruct-2501',
 function pickLLM7(list){const P=PROVIDERS.find(p=>p.id==='llm7');const ids=list||P.list||LLM7_PREF;const m=LLM7_PREF.find(x=>ids.includes(x)&&!llm7Bad.has(x));if(m){if(m!==P.model)dlog('llm7 model ->',m);P.model=m;return true}return false}
 async function refreshLLM7(){try{const ctl=new AbortController();setTimeout(()=>ctl.abort(),4000);const r=await fetch('https://api.llm7.io/v1/models',{signal:ctl.signal,cache:'no-store'});const j=await r.json();const ids=(j.data||j).map(m=>m.id);PROVIDERS.find(p=>p.id==='llm7').list=ids;if(!pickLLM7(ids))PROVIDERS.find(p=>p.id==='llm7').rest=Date.now()+6e5;dlog('llm7 models ok',ids.length)}catch(e){dlog('llm7 models fetch failed',String(e))}}
 const cloudOn=Q.get('brain')!=='local';let cloudDownUntil=0,cloudCtl=null,fgOn=0,cloudBusy=false,lastFgEnd=0;
-async function* provGen(P,msgs,max,temp,bg){const ctl=new AbortController();if(!bg)cloudCtl=ctl;let firstTimer=setTimeout(()=>ctl.abort('timeout'),bg?12000:P.first);
+let bgCtlNow=null;async function* provGen(P,msgs,max,temp,bg){const ctl=new AbortController();if(!bg)cloudCtl=ctl;else bgCtlNow=ctl;let firstTimer=setTimeout(()=>ctl.abort('timeout'),bg?12000:P.first);
  let r;try{r=await fetch(P.url,{method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,body:JSON.stringify({model:P.model,messages:msgs,stream:true,temperature:temp,max_tokens:P.id==='llm7'?Math.round(max*1.3):Math.max(400,max*4),seed:Math.floor(Math.random()*1e9),...P.extra})})}
  catch(e){clearTimeout(firstTimer);dlog('cloud',P.id,ctl.signal.aborted?'timeout':'network',String(e));throw new Error(P.id+' '+(ctl.signal.aborted?'timeout':'network'))}
  if(!r.ok||!r.body){clearTimeout(firstTimer);let tx='';try{tx=(await r.text()).slice(0,200)}catch{}if(P.id==='llm7'&&/model|unavailable|not.?found/i.test(tx)&&r.status!==429){llm7Bad.add(P.model);pickLLM7()}dlog('cloud',P.id,P.model,'HTTP',r.status,tx.slice(0,120));(T.cloudErr||(T.cloudErr=[])).push(P.id+' '+r.status+' '+tx.slice(0,90));throw new Error(P.id+' HTTP '+r.status+(P.id==='llm7'&&/model|unavailable|not.?found/i.test(tx)&&r.status!==429?' badmodel':''))}
@@ -115,13 +115,14 @@ async function* provGen(P,msgs,max,temp,bg){const ctl=new AbortController();if(!
    let j;try{j=JSON.parse(d)}catch{continue}const c=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content;// reasoning is ignored
    if(c){if(!got){got=true;clearTimeout(firstTimer)}arm();yield c}}}}
  catch(e){if(!got)throw new Error(P.id+' '+(ctl.signal.aborted?'timeout':'stream'));throw e}
- finally{clearTimeout(firstTimer);clearTimeout(idle);try{rd.cancel().catch(()=>{})}catch{}}
+ finally{if(bgCtlNow===ctl)bgCtlNow=null;clearTimeout(firstTimer);clearTimeout(idle);try{rd.cancel().catch(()=>{})}catch{}}
  if(!got)throw new Error(P.id+' returned no text')}
 const cloud={name:'cloud',interrupt:()=>{try{cloudCtl&&cloudCtl.abort()}catch{}},
  async *gen(msgs,max,temp=.8,bg=false){if(bg){while(fgOn||cloudBusy)await new Promise(r=>setTimeout(r,300));cloudBusy=true}else fgOn++;
-  try{let last=null;const order=bg?[...PROVIDERS].sort(a=>a.id==='pollinations'?-1:1):[...PROVIDERS];let retried=false;const allRest=order.every(q=>Date.now()<q.rest);for(const P of order){if(Date.now()<P.rest&&(bg||!allRest))continue;let got=false;const t0=performance.now();
-    try{for await(const t of provGen(P,msgs,max,temp,bg)){if(!got){got=true;T.provider=P.id;if(!bg)dlog('cloud first token',P.id,P.model,Math.round(performance.now()-t0)+'ms');if(!bg)(T.provFirst||(T.provFirst=[])).push([P.id,Math.round(performance.now()-t0)])}yield t}if(got)return}
-    catch(e){if(got)return;last=e;if(/badmodel/.test(e.message)&&!retried&&!llm7Bad.has(P.model)){retried=true;order.splice(order.indexOf(P)+1,0,P);continue}console.warn('cloud',e);(T.cloudErr||(T.cloudErr=[])).push(String(e.message||e));P.rest=Date.now()+(/429/.test(e.message)?20000:/timeout/.test(e.message)?40000:10000)}}
+  try{let last=null;if(!bg&&bgCtlNow){try{bgCtlNow.abort('preempt')}catch{}dlog('preempted background job')}const now=Date.now();const order=bg?PROVIDERS.filter(a=>a.id==='pollinations'):[...PROVIDERS].sort((a,b)=>(now<a.rest)-(now<b.rest));let retried=false;const allRest=order.every(q=>Date.now()<q.rest);for(const P of order){if(bg&&Date.now()<P.rest)continue;let got=false;const t0=performance.now();
+    try{for await(const t of provGen(P,msgs,max,temp,bg)){if(!got){got=true;T.provider=P.id;P._c429=false;if(!bg)dlog('cloud first token',P.id,P.model,Math.round(performance.now()-t0)+'ms');if(!bg)(T.provFirst||(T.provFirst=[])).push([P.id,Math.round(performance.now()-t0)])}yield t}if(got)return}
+    catch(e){if(got)return;last=e;if(/badmodel/.test(e.message)&&!retried&&!llm7Bad.has(P.model)){retried=true;order.splice(order.indexOf(P)+1,0,P);continue}
+    if(!bg&&P.id==='llm7'&&/HTTP 429/.test(e.message)&&!P._c429){P._c429=true;dlog('llm7 busy, retrying in 1.2 s');await new Promise(z=>setTimeout(z,1200));order.splice(order.indexOf(P)+1,0,P);continue}P._c429=false;console.warn('cloud',e);(T.cloudErr||(T.cloudErr=[])).push(String(e.message||e));P.rest=Date.now()+(/429/.test(e.message)?20000:/timeout/.test(e.message)?40000:10000)}}
    throw last||new Error('all cloud minds resting')}
   finally{if(bg)cloudBusy=false;else{fgOn--;lastFgEnd=Date.now()}}}};
 let usingLocal=false;const allowLocal=Q.get('local')==='1'||!(isIOS||SAFE);
@@ -143,9 +144,9 @@ function mkWorker(file,k){let w;try{w=new Worker(file,{type:'module'})}catch(e){
  w.addEventListener('error',e=>{if(ok[k]===null){ok[k]=false;prog[k]=1}fail(`${k==='voice'?'Voice':'Ears'} worker crashed${k==='voice'?' — using the built-in iPhone/browser voice instead':''}.`,e.message)});
  w.addEventListener('message',e=>{const m=e.data;if(m.type==='progress'&&m.p&&m.p.progress!=null)prog[k]=m.p.progress/100;if(m.type==='ready'){ok[k]=true;prog[k]=1;T[k]=m.device}if(m.type==='error'){ok[k]=false;prog[k]=1;fail(k==='voice'?'Natural voice failed to load — using the built-in voice.':'Speech recognizer failed to load.',m.error)}});return w}
 const wantGPUworkers=gpuOK&&!mobile;
-const voiceMode=Q.get('voice')||((isIOS||SAFE)?'native':'kokoro');T.voiceMode=voiceMode;dlog('voice mode',voiceMode,'ears',earsMode);
-let ttsW=null;if(voiceMode==='kokoro'){ttsW=mkWorker('tts-worker.js?v=6','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers})}else{need.voice=false;ok.voice=false;prog.voice=1}
-let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=6','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers})}
+const voiceMode=Q.get('voice')||(SAFE?'native':'kokoro');T.voiceMode=voiceMode;dlog('voice mode',voiceMode,'ears',earsMode);
+let ttsW=null;if(voiceMode==='kokoro'){ttsW=mkWorker('tts-worker.js?v=7','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers})}else{need.voice=false;ok.voice=false;prog.voice=1}
+let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=7','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers,model:Q.get('asr')||(mobile?'onnx-community/whisper-tiny.en':'onnx-community/whisper-base.en')})}
 
 // ---------- persona + growing memory ----------
 const SEED=['Joseph runs Red Line Hockey Co., selling hockey digital products and hats','Joseph plays for and runs the Three Mile Islanders hockey team and its Facebook page','Joseph lives in the America/New_York time zone'];
@@ -212,13 +213,13 @@ function newSessionCheck(){const S=mem.stats,now=Date.now();if(!S.firstMet)S.fir
 // background memory jobs: run only when idle; a new question interrupts them
 let bgQ=[],bgRunning=false;
 function queueBg(fn){bgQ.push(fn);T.bgQ=bgQ.length;setTimeout(runBg,1500)}
-let lastBg=0;async function runBg(){const cloudBg=cloudOn&&Date.now()>cloudDownUntil;if(bgRunning||!brain||!bgQ.length||Date.now()-lastBg<(cloudBg?1500:20000))return;if(!cloudBg&&(busy||st!=='idle'))return;if(cloudBg&&(fgOn||st==='thinking'||(st!=='speaking'&&Date.now()-lastFgEnd<4000)))return;
+let lastBg=0,hearing=false,lastHeard=0;async function runBg(){const cloudBg=cloudOn&&Date.now()>cloudDownUntil;if(bgRunning||!brain||!bgQ.length||Date.now()-lastBg<(cloudBg?1500:20000))return;if(!cloudBg&&(busy||st!=='idle'))return;if(cloudBg&&(fgOn||st==='thinking'||st==='speaking'||hearing||Date.now()-lastFgEnd<12000||Date.now()-lastHeard<12000))return;
  lastBg=Date.now();bgRunning=true;if(!cloudBg)busy=true;const fn=bgQ.shift();T.bgQ=bgQ.length;T.bgRuns=(T.bgRuns||0)+1;
  try{await fn()}catch(e){console.warn('memory job',e);(T.bgErr||(T.bgErr=[])).push(String(e&&e.message||e).slice(0,120));fn.tries=(fn.tries||0)+1;if(fn.tries<3)bgQ.push(fn);T.bgFails=(T.bgFails||0)+1}finally{bgRunning=false;if(!cloudBg)busy=false}if(bgQ.length)setTimeout(runBg,cloudBg?1600:800)}
 setInterval(runBg,1000);
 // strip assistant-isms
 const ASSIST=/\b(how (else )?can i (help|assist)|anything else|what else (can|should|would) (we|i|you)|let me know|i'?m (always )?here (to help|for you|if you)|happy to help|glad to help|feel free|as an ai\b|is there (anything|something)|how may i|hope (this|that) helps|i'?d be happy to)/i;
-function deAssist(x){x=String(x).replace(/\*[^*]{1,40}\*|\((?:laughs|grins|smiles|chuckles|giggles|sighs)[^)]*\)/gi,'').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu,'').replace(/\s{2,}/g,' ');return x.split(/(?<=[.!?…])\s+/).filter(z=>!ASSIST.test(z)).join(' ').trim()}
+function deAssist(x){x=String(x).replace(/([.!?])\s+\.(?!\.)/g,"$1").replace(/\*[^*]{1,40}\*|\((?:laughs|grins|smiles|chuckles|giggles|sighs)[^)]*\)/gi,'').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu,'').replace(/\s{2,}/g,' ');return x.split(/(?<=[.!?…])\s+/).filter(z=>!ASSIST.test(z)).join(' ').trim()}
 T.deAssist=deAssist;
 async function ask(sysTxt,user,max){let s='';for await(const t of brain.gen([{role:'system',content:sysTxt},{role:'user',content:user}],max*2,.4,true))s+=t;if(!s)throw new Error('no answer');s=s.replace(/<think>[\s\S]*?<\/think>/g,'');return JSON.parse(s.slice(s.indexOf('{'),s.lastIndexOf('}')+1))}
 function addFacts(list,arr,cap){for(let f of arr||[]){if(typeof f!=='string')continue;f=f.trim().replace(/\s+/g,' ');if(f.length<6||f.length>160||/^\w+:\s|\?|^(none|n\/a)/i.test(f))continue;const n=norm(f);if(list.some(x=>norm(x)===n||(n.length>20&&norm(x).includes(n))))continue;list.push(f)}while(list.length>cap)list.shift()}
@@ -252,7 +253,12 @@ async function grow(){const recent=mem.history.slice(-12).map(h=>(h.role==='user
 async function summarize(lines,t){const j=await ask('Summarize a past conversation for an AI companion\'s memory. Reply with ONLY a JSON object.',`${lines.slice(-30).join('\n')}\n\nReturn {"summary":"2 sentence summary of what you and Joseph talked about"}`,120);
  if(j.summary){mem.summaries.push({t,text:j.summary});mem.summaries=mem.summaries.slice(-50);mem.summary=(mem.summary+' '+j.summary).slice(-900);await save(mem)}}
 // export / import so she can never be lost
-function exportMem(){const blob=new Blob([JSON.stringify({companion:'voice-companion',version:VERSION,exported:new Date().toISOString(),mem},null,1)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${(mem.name||'companion').toLowerCase()}-memory-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000);status('Memory exported.')}
+async function exportMem(){const txt=JSON.stringify({companion:'voice-companion',version:VERSION,exported:new Date().toISOString(),mem},null,1);const fn=`${(mem.name||'companion').toLowerCase()}-memory-${new Date().toISOString().slice(0,10)}.json`;
+ // never use an <a download> or blob URL: in iOS in-app browsers that hands off to another browser app
+ try{const f=new File([txt],fn,{type:'application/json'});if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:fn});dlog('export shared');return}}catch(e){if(e&&e.name==='AbortError')return;dlog('share failed',String(e))}
+ let d=$('expbox');if(!d){d=document.createElement('div');d.id='expbox';d.innerHTML='<div id=dgh>Memory backup. Copy this text and save it somewhere safe.<span><button id=exc>Copy</button><button id=exx>Close</button></span></div><textarea id=ext readonly></textarea>';document.body.appendChild(d);
+  $('exx').onclick=()=>d.classList.remove('on');$('exc').onclick=async()=>{const ta=$('ext');try{await navigator.clipboard.writeText(ta.value)}catch{ta.select();try{document.execCommand('copy')}catch{}}$('exc').textContent='Copied'}}
+ $('ext').value=txt;d.classList.add('on')}
 async function importMem(file){try{const j=JSON.parse(await file.text());const m=j.mem||j;if(!m||!Array.isArray(m.history))throw new Error('not a memory file');mem=migrate(m);await save(mem);$('name').textContent=mem.name||'◦';status(`Memory restored${mem.name?' — '+mem.name+' remembers':''}: ${mem.facts.length} facts, ${mem.history.length/2|0} exchanges.`);T.imported=true}catch(e){fail('That file is not a memory backup: '+e.message)}}
 $('mm').onclick=()=>$('mp').classList.toggle('on');$('mx').onclick=()=>{exportMem();$('mp').classList.remove('on')};$('mi').onclick=()=>$('mf').click();$('mf').onchange=e=>{const f=e.target.files[0];if(f)importMem(f);e.target.value='';$('mp').classList.remove('on')};
 // ---------- speech out ----------
@@ -266,20 +272,20 @@ function browserSay(text,tid){return new Promise(r=>{if(T.eos){(T.eosToAudioMs||
  u.onend=()=>fin('end');u.onerror=e=>fin('error '+(e&&e.error));u.onstart=()=>{T.ttsStarted=(T.ttsStarted||0)+1};lvlFake(u);
  try{speechSynthesis.resume()}catch{}speechSynthesis.speak(u)})}
 function lvlFake(u){let on=true;u.addEventListener('end',()=>{on=false;level=0});(function f(){if(!on)return;level=st==='speaking'?.12+Math.random()*.18:0;setTimeout(f,90)})()}
-let sayPending=0;function speak(text,tid){if(!text)return;sayPending++;
+let sayPending=0;function speak(text,tid){if(!text)return;if(lastAsk&&lastAsk.tid===tid)lastAsk.voiced=true;sayPending++;
  ttsQ=ttsQ.then(async()=>{try{if(tid!==turnId)return;
-  if(ok.voice===true&&ttsW){const d=await new Promise(r=>{const id=++nid;pend[id]=r;ttsW.postMessage({type:'say',text,id});setTimeout(()=>{if(pend[id]){delete pend[id];r({error:'timeout'})}},30000)});
-   if(tid!==turnId)return;if(d.audio&&d.audio.length){play(d.audio,d.sr,text);return}fail('Natural voice hiccuped — using the built-in voice.',d.error)}
+  if(ok.voice===true&&ttsW){const k0=performance.now();const d=await new Promise(r=>{const id=++nid;pend[id]=r;ttsW.postMessage({type:'say',text,id});setTimeout(()=>{if(pend[id]){delete pend[id];r({error:'timeout'})}},30000)});
+   if(tid!==turnId)return;if(d.audio&&d.audio.length){(T.ttsMs||(T.ttsMs=[])).push(Math.round(performance.now()-k0));play(d.audio,d.sr,text);return}fail('Natural voice hiccuped — using the built-in voice.',d.error)}
   await browserSay(text,tid)}finally{sayPending--}})}
 function play(f,sr,text){if(T.eos){(T.eosToAudioMs||(T.eosToAudioMs=[])).push(Math.round(performance.now()-T.eos));T.eos=0}if(ac.state!=='running')ac.resume().catch(()=>{});const b=ac.createBuffer(1,f.length,sr);b.copyToChannel(f,0);const s=ac.createBufferSource();s.buffer=b;const an=ac.createAnalyser();s.connect(an);an.connect(ac.destination);playT=Math.max(playT,ac.currentTime+.05);s.start(playT);playT+=b.duration;sources.push(s);setState('speaking');T.spoken.push({engine:'kokoro',text,seconds:b.duration});
  const arr=new Uint8Array(256);(function m(){if(!sources.includes(s))return;an.getByteTimeDomainData(arr);let x=0;for(const v of arr)x=Math.max(x,Math.abs(v-128));level=x/400;requestAnimationFrame(m)})();
  s.onended=()=>{sources=sources.filter(q=>q!==s);if(!sources.length&&st==='speaking'&&!thinkingNow)afterSpeak()}}
-function afterSpeak(){setState('idle');if(handsFree){autoStart=true;setTimeout(()=>{if(st==='idle')startListening()},iosEars?350:0)}}
+function afterSpeak(){herEnd=Date.now();setState('idle');if(handsFree){autoStart=true;setTimeout(()=>{if(st==='idle')startListening()},iosEars?350:0)}}
 function stopPlay(){turnId++;for(const s of sources)try{s.stop()}catch{}sources=[];playT=0;try{speechSynthesis.cancel()}catch{}try{brain&&brain.interrupt()}catch{}ttsQ=Promise.resolve()}
 
 // ---------- think ----------
 let busy=false,thinkingNow=false;
-async function respond(text){if(iosEars){try{rec&&recOn&&rec.abort()}catch{}recOn=false}dlog('respond',text.slice(0,80));const tid=++turnId;T.heard.push(text);if(caps){$('you').textContent=text;$('her').textContent=''}
+let lastAsk=null;async function respond(text){if(iosEars){try{rec&&recOn&&rec.abort()}catch{}recOn=false}if(lastAsk&&Date.now()-lastAsk.t<6000&&!lastAsk.voiced){text=lastAsk.text+' '+text;T.heard.pop();T.merged=(T.merged||0)+1;dlog('merged with previous fragment')}stopPlay();dlog('respond',text.slice(0,80));const tid=++turnId;lastAsk={text,t:Date.now(),tid,voiced:false};T.heard.push(text);if(caps){$('you').textContent=text;$('her').textContent=''}
  if(!brain){if(ok.brain===null){status(`My mind is still loading (${pct('brain')}%). Keep this page open.`);speak(`I heard you. My mind is still waking up, about ${pct('brain')} percent. Give me a moment and ask again.`,tid)}
   else speak("I can hear you, but my mind failed to load on this device. Try reloading the page on Wi-Fi.",tid);setState('idle');return}
  newSessionCheck();setState('thinking');mind.think(relate(text));maybeAck(tid);thinkingNow=true;if(bgRunning&&usingLocal){try{local&&local.interrupt()}catch{}}while(busy)await new Promise(r=>setTimeout(r,50));busy=true;
@@ -305,7 +311,10 @@ async function respond(text){if(iosEars){try{rec&&recOn&&rec.abort()}catch{}recO
 
 // ---------- listen ----------
 let sid=0;const sttPend={};sttW&&sttW.addEventListener('message',e=>{if(e.data.type==='text'&&sttPend[e.data.id]){sttPend[e.data.id](e.data);delete sttPend[e.data.id]}});
-const transcribe=audio=>new Promise(r=>{const id=++sid;sttPend[id]=r;sttW.postMessage({type:'run',audio,id})});
+const transcribe=async audio=>{const t0=performance.now();while(ok.ears===null&&performance.now()-t0<90000){status(`My ears are still loading (${pct('ears')}%)…`);await new Promise(z=>setTimeout(z,300))}
+ if(ok.ears!==true||!sttW)return {text:'',error:'speech recognizer unavailable'};const s0=performance.now();
+ const r=await new Promise(r=>{const id=++sid;sttPend[id]=r;sttW.postMessage({type:'run',audio,id});setTimeout(()=>{if(sttPend[id]){delete sttPend[id];r({text:'',error:'transcribe timeout'})}},20000)});
+ const ms=Math.round(performance.now()-s0);(T.sttMs||(T.sttMs=[])).push(ms);dlog('transcribed',ms+'ms',JSON.stringify(r.text||r.error||''));return r};
 function goodText(t){return t&&t.length>1&&!/^\[.*\]$/.test(t)&&!/^\(.*\)$/.test(t)&&!/^(you|thank you)\.?$/i.test(t)}
 // Web Speech path
 let rec=null,recOn=false;
@@ -322,46 +331,51 @@ function webListen(){if(!SR){fail('This browser has no speech recognition yet; m
    cur=s;lastRes=performance.now();noSpeech=0;clearTimeout(specT);clearTimeout(endT);
    specT=setTimeout(()=>{if(!iosEars&&goodText(cur)&&st==='listening'){specText=cur;T.eos=lastRes;respond(cur)}},350);
    endT=setTimeout(()=>commit(),iosEars?1000:650)};
-  rec.onerror=e=>{recOn=false;dlog('recognition error',e.error,e.message||'');if((e.error==='no-speech'||e.error==='aborted')&&handsFree&&begun&&st==='listening'&&!committed&&++noSpeech<4){setTimeout(()=>{if(st==='listening'||st==='idle')webListen()},300);return}if(e.error==='not-allowed'&&autoStart){status('Tap TALK when you want to talk.');setState('idle');return}const m={'not-allowed':micHelp(),'service-not-allowed':isIOS?'Speech recognition is off. Open Settings > General > Keyboard and turn on Enable Dictation, then reload.':'Speech recognition is blocked in this browser.','network':'Speech recognition needs an internet connection.','audio-capture':'No microphone found.'}[e.error];if(m)fail(m);if(st==='listening'&&!specText)setState('idle')};
+  rec.onerror=e=>{recOn=false;dlog('recognition error',e.error,e.message||'');if((e.error==='no-speech'||e.error==='aborted')&&handsFree&&begun&&st==='listening'&&!committed&&++noSpeech<4){setTimeout(()=>{if(st==='listening'||st==='idle')webListen()},300);return}if(e.error==='not-allowed'&&autoStart){status('Tap TALK when you want to talk.');setState('idle');return}const m={'not-allowed':micHelp(),'service-not-allowed':'Built-in speech recognition is not available here.','network':'Speech recognition needs an internet connection.','audio-capture':'No microphone found.'}[e.error];if(m)fail(m);if(st==='listening'&&!specText)setState('idle')};
   rec.onend=()=>{recOn=false;if(committed)return;if(st==='listening'){if(goodText(cur)&&!specText){T.eos=lastRes||performance.now();respond(cur)}else if(!specText){setState('idle');if(handsFree&&begun)setTimeout(()=>{if(st==='idle')startListening()},250)}}};
   rec.start();recOn=true;autoStart=false;setState('listening');status('')}catch(e){fail('Could not start listening: '+e.message);setState('idle')}}
 // Whisper + VAD path
 let vad=null,vadP=null;
+let segOverHer=false,herEnd=0,micOpens=0;const BARGE=+(Q.get('barge')||.06);
+let micDenied=false,gestureNow=false;function openMic(){if(micDenied&&!gestureNow)return Promise.reject(Object.assign(new Error('mic denied; waiting for a tap'),{name:'NotAllowedError'}));micOpens++;T.micOpens=micOpens;dlog('getUserMedia open #'+micOpens);return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}}).then(s=>{micDenied=false;s.getAudioTracks().forEach(t=>t.onended=()=>{dlog('mic track ended');T.micEnded=(T.micEnded||0)+1;micStream=null});return s},e=>{if(e&&e.name==='NotAllowedError'){micDenied=true;fail(micHelp(),String(e))}else fail('Microphone error: '+(e&&e.message),String(e));throw e})}
 function ensureVAD(){if(vadP)return vadP;vadP=(async()=>{if(!window.vad||!window.vad.MicVAD)throw new Error('voice-activity library did not load');
  const base='https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/';
  vad=await window.vad.MicVAD.new({baseAssetPath:base,onnxWASMBasePath:'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/',model:'v5',startOnLoad:false,submitUserSpeechOnPause:true,
-  redemptionFrames:8,positiveSpeechThreshold:.6,minSpeechFrames:4,
-  getStream:async()=>micStream||(micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})),
+  redemptionMs:700,minSpeechMs:300,preSpeechPadMs:250,positiveSpeechThreshold:.6,negativeSpeechThreshold:.4,
+  getStream:async()=>micStream||(micStream=await openMic()),
   pauseStream:async()=>{},resumeStream:async s=>s,
   onFrameProcessed:p=>{if(st!=='speaking')level=p.isSpeech*.15},
-  onSpeechStart:()=>{if(st==='speaking'||st==='thinking')stopPlay();setState('listening');status('Hearing you…')},
-  onVADMisfire:()=>{},
-  onSpeechEnd:async audio=>{T.eos=performance.now();if(!handsFree)vad.pause();setState('thinking');status('Understanding…');const r=await transcribe(audio);if(r.error)fail('Speech recognizer error.',r.error);const t=(r.text||'').trim();
+  onSpeechStart:()=>{hearing=true;lastHeard=Date.now();if(bgCtlNow){try{bgCtlNow.abort('user speaking')}catch{}}segOverHer=st==='speaking'||Date.now()-herEnd<400;if(!segOverHer){if(st==='thinking')stopPlay();setState('listening');status('Hearing you…')}},
+  onVADMisfire:()=>{hearing=false},
+  onSpeechEnd:async audio=>{hearing=false;lastHeard=Date.now();let e=0;for(let i=0;i<audio.length;i++)e+=audio[i]*audio[i];const rms=Math.sqrt(e/audio.length);
+   if(segOverHer||st==='speaking'){if(rms<BARGE){T.echoIgnored=(T.echoIgnored||0)+1;dlog('ignored sound over her voice rms',rms.toFixed(3));return}dlog('barge-in rms',rms.toFixed(3));stopPlay()}
+   T.eos=performance.now();dlog('end of speech',Math.round(audio.length/16)+'ms rms',rms.toFixed(3));if(!handsFree){vad.pause();vadOn=false}setState('thinking');status('Understanding…');const r=await transcribe(audio);if(r.error)fail('Speech recognizer error.',r.error);const t=(r.text||'').trim();
    if(goodText(t)){status('');respond(t)}else{status("I didn't catch that — tap TALK and try again.");setState('idle')}}});return vad})();
- vadP.catch(e=>{vadP=null;fail('Voice detection failed to start'+(SR?' — switching to built-in speech recognition.':'.'),String(e));if(SR)earsMode='web'});return vadP}
+ vadP.catch(e=>{vadP=null;if(e&&e.name==='NotAllowedError')return;fail('Voice detection failed to start. Tap TALK to retry.',String(e))});return vadP}
 async function startListening(){
- if(earsMode==='web'||(ok.ears!==true&&SR&&ok.ears!==null)){return webListen()}
- if(ok.ears===null){if(SR){return webListen()}status(`My ears are still loading (${pct('ears')}%). One moment…`);return}
- if(ok.ears===false){if(SR){earsMode='web';return webListen()}fail('Speech recognizer failed to load, and this browser has no built-in one. Reload on Wi-Fi.');return}
- try{const v=await ensureVAD();await v.start();try{v._audioContext&&v._audioContext.resume()}catch{}setState('listening');status('Listening… speak now.')}catch(e){if(SR)return webListen();setState('idle')}}
-function stopListening(){try{vad&&vad.pause()}catch{}try{rec&&recOn&&rec.stop()}catch{}if(st==='listening'&&!vad)setState('idle');if(vad&&st==='listening')setTimeout(()=>{if(st==='listening')setState('idle')},300)}
-function micHelp(){return isIOS?'Microphone blocked. Tap the aA icon in the address bar > Website Settings > Microphone > Allow, then reload.':'Microphone blocked. Click the lock/tune icon next to the address > Microphone > Allow, then reload.'}
+ if(earsMode==='web')return webListen();
+ if(micDenied&&!gestureNow){setState('idle');return}
+ if(ok.ears===false){fail('My ears failed to load. Check Wi-Fi, then tap TALK.');return}
+ try{const v=await ensureVAD();if(!vadOn){await v.start();vadOn=true}try{v._audioContext&&v._audioContext.resume()}catch{}setState('listening');status(ok.ears===true?'':`Ears loading ${pct('ears')}% — talk anytime.`)}catch(e){dlog('listen failed',String(e));setState('idle')}}
+let vadOn=false;
+function stopListening(){try{vad&&vad.pause();vadOn=false}catch{}try{rec&&recOn&&rec.stop()}catch{}if(st==='listening'&&!vad)setState('idle');if(vad&&st==='listening')setTimeout(()=>{if(st==='listening')setState('idle')},300)}
+function micHelp(){return isIOS?'I can\'t hear you: microphone access was denied. Tap TALK to ask again. If no prompt appears, open iPhone Settings, find this app (or Safari) > Microphone > On, then reload.':'Microphone blocked. Click the lock/tune icon next to the address > Microphone > Allow, then reload.'}
 
 // ---------- first tap: unlock audio + mic (must be synchronous inside the gesture on iOS) ----------
 let begun=false;
-function unlock(){if(begun)return;begun=true;
+let micP=null;function unlock(){gestureNow=true;setTimeout(()=>gestureNow=false,1500);if(begun)return;begun=true;
  dlog('BEGIN tapped');if(voiceMode==='kokoro')try{const AC=window.AudioContext||window.webkitAudioContext;ac=new AC();ac.resume();const b=ac.createBuffer(1,1,22050);const s=ac.createBufferSource();s.buffer=b;s.connect(ac.destination);s.start(0)}catch(e){fail('Audio could not start: '+e.message)}
  try{if('speechSynthesis' in window){const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}}catch{}
  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){fail(location.protocol!=='https:'?'Microphone needs a secure (https) page.':'This browser cannot use the microphone.');}
- else if(earsMode!=='web'){navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(s=>{micStream=s;status('Microphone on.')}).catch(e=>fail(e.name==='NotAllowedError'?micHelp():e.name==='NotFoundError'?'No microphone found on this device.':'Microphone error: '+e.message,String(e)))}
- warm();$('boot').style.display='none';setState('idle');if(handsFree){if(iosEars&&earsMode==='web')webListen();else setTimeout(()=>startListening(),400)}status(ok.brain?'':'Still waking up — you can tap TALK anytime.')}
+ else if(earsMode!=='web'){micP=openMic().then(s=>{micStream=s;status('');if(handsFree)startListening()}).catch(e=>fail(e.name==='NotAllowedError'?micHelp():e.name==='NotFoundError'?'No microphone found on this device.':'Microphone error: '+e.message,String(e)))}
+ warm();$('boot').style.display='none';setState('idle');if(handsFree){if(iosEars&&earsMode==='web')webListen();}status(ok.brain?'':'Still waking up — you can tap TALK anytime.')}
 $('go').onclick=()=>unlock();
 // pre-warm the cloud connection and keep it alive; pre-synthesize a soft acknowledgement
 function warm(){if(!cloudOn)return;const ping=()=>{for(const u of ['https://text.pollinations.ai/models','https://api.llm7.io/v1/models'])fetch(u,{cache:'no-store'}).catch(()=>{})};ping();setInterval(()=>{if(document.visibilityState==='visible')ping()},40000)}
 let ackBuf=null;function prepAck(){if(ackBuf||ok.voice!==true||!ttsW)return;const id=++nid;pend[id]=d=>{if(d.audio&&d.audio.length)ackBuf=d};ttsW.postMessage({type:'say',text:'Mm.',id})}
 setInterval(prepAck,2000);
 function maybeAck(tid){setTimeout(()=>{if(tid===turnId&&st==='thinking'&&!sources.length&&ackBuf&&ac){T.acks=(T.acks||0)+1;const b=ac.createBuffer(1,ackBuf.audio.length,ackBuf.sr);b.copyToChannel(ackBuf.audio,0);const s=ac.createBufferSource();s.buffer=b;const gn=ac.createGain();gn.gain.value=.55;s.connect(gn);gn.connect(ac.destination);s.start()}},1100)}
-$('talk').onclick=()=>{if(!begun)unlock();if(ac&&ac.state!=='running')ac.resume().catch(()=>{});
+$('talk').onclick=()=>{gestureNow=true;setTimeout(()=>gestureNow=false,1500);if(!begun)unlock();if(ac&&ac.state!=='running')ac.resume().catch(()=>{});
  if(st==='listening'){stopListening();return}
  if(st==='speaking'||st==='thinking'){stopPlay();setState('idle');if(!handsFree)return}
  stopPlay();startListening()};
