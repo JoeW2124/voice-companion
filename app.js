@@ -1,7 +1,7 @@
 // Voice companion v2 — every failure is shown on screen; WebGPU fast path, CPU (wllama) fallback.
-import { load, save } from "./memory.js?v=8";
+import { load, save } from "./memory.js?v=9";
 if(window.__resetting)throw new Error('resetting');
-const VERSION='v8';
+const VERSION='v9';
 const $=id=>document.getElementById(id);
 const norm=x=>String(x).toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
 const Q=new URLSearchParams(location.search);
@@ -26,10 +26,10 @@ let quietT=0;const wake=()=>{document.body.classList.remove('quiet');clearTimeou
 let st='idle',level=0,handsFree=Q.get('hf')!=='0',caps=true,ac=null,micStream=null,turnId=0,sources=[],playT=0,mem={name:null,nameReason:null,facts:[],reflections:[],history:[],lastSeen:null};
 function setState(s){if(s!==st)dlog('state',s);st=s;$('state').textContent={idle:handsFree?'LISTENING · HANDS-FREE':'READY — TAP TALK',listening:'LISTENING — TAP TO STOP',thinking:'THINKING',speaking:'SPEAKING — TAP TO INTERRUPT'}[s]||s;$('talk').classList.toggle('on',s!=='idle');$('talk').textContent={idle:'TALK',listening:'STOP',thinking:'…',speaking:'STOP'}[s]||'TALK'}
 // ---------- visual: cosmic neural mind (brain.js) ----------
-import { createBrain } from "./brain.js?v=8";
+import { createBrain } from "./brain.js?v=9";
 function createOrb(cv,getSt){const g=cv.getContext('2d');let lv=()=>0;const dpr=Math.min(2,devicePixelRatio||1);(function f(t){cv.width=innerWidth*dpr;cv.height=innerHeight*dpr;const x=cv.width/2,y=cv.height*.42,r=Math.min(cv.width,cv.height)*(.12+lv()*.15+(getSt()==='thinking'?.02*Math.sin(t/150):0));const gr=g.createRadialGradient(x,y,0,x,y,r*2.2);gr.addColorStop(0,'#e8fdff');gr.addColorStop(.25,'#5fe3ffcc');gr.addColorStop(1,'#0000');g.fillStyle='#02030a';g.fillRect(0,0,cv.width,cv.height);g.fillStyle=gr;g.fillRect(0,0,cv.width,cv.height);requestAnimationFrame(f)})(0);
  return {setGraph(){},ignite(){},think(){},hit(){return null},setLevel(f){lv=f}}}
-let mind;try{if(SAFE)throw new Error('safe mode');mind=createBrain($('cv'),()=>st);dlog('galaxy ok')}catch(e){dlog('galaxy off:',String(e));mind=createOrb($('cv'),()=>st)}mind.setLevel(()=>level);
+let mind;try{if(SAFE)throw new Error('safe mode');mind=createBrain($('cv'),()=>st);dlog('galaxy ok')}catch(e){dlog('galaxy off:',String(e));mind=createOrb($('cv'),()=>st)}mind.setLevel(()=>level);let voiceLvl=0;try{mind.setVoice&&mind.setVoice(()=>voiceLvl)}catch{}
 $('cv').addEventListener('click',e=>{if(st==='listening'&&hearing){forceEnd('orb tap');return}try{const n=mind.hit(e.clientX,e.clientY);if(n)T.tapped=n.label}catch(err){dlog('hit err',String(err))}});
 
 // ---------- loading state ----------
@@ -145,8 +145,8 @@ function mkWorker(file,k){let w;try{w=new Worker(file,{type:'module'})}catch(e){
  w.addEventListener('message',e=>{const m=e.data;if(m.type==='progress'&&m.p&&m.p.progress!=null)prog[k]=m.p.progress/100;if(m.type==='ready'){ok[k]=true;prog[k]=1;T[k]=m.device}if(m.type==='error'){ok[k]=false;prog[k]=1;fail(k==='voice'?'Natural voice failed to load — using the built-in voice.':'Speech recognizer failed to load.',m.error)}});return w}
 const wantGPUworkers=gpuOK&&!mobile;
 const voiceMode=Q.get('voice')||(SAFE?'native':'kokoro');T.voiceMode=voiceMode;dlog('voice mode',voiceMode,'ears',earsMode);
-let ttsW=null;if(voiceMode==='kokoro'){ttsW=mkWorker('tts-worker.js?v=8','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers})}else{need.voice=false;ok.voice=false;prog.voice=1}
-let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=8','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers,model:Q.get('asr')||(mobile?'onnx-community/whisper-tiny.en':'onnx-community/whisper-base.en')})}
+let ttsW=null;if(voiceMode==='kokoro'){ttsW=mkWorker('tts-worker.js?v=9','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers})}else{need.voice=false;ok.voice=false;prog.voice=1}
+let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=9','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers,model:Q.get('asr')||(mobile?'onnx-community/whisper-tiny.en':'onnx-community/whisper-base.en')})}
 
 // ---------- persona + growing memory ----------
 const SEED=['Joseph runs Red Line Hockey Co., selling hockey digital products and hats','Joseph plays for and runs the Three Mile Islanders hockey team and its Facebook page','Joseph lives in the America/New_York time zone'];
@@ -278,7 +278,7 @@ let sayPending=0;function speak(text,tid){if(!text)return;if(lastAsk&&lastAsk.ti
    if(tid!==turnId)return;if(d.audio&&d.audio.length){(T.ttsMs||(T.ttsMs=[])).push(Math.round(performance.now()-k0));play(d.audio,d.sr,text);return}fail('Natural voice hiccuped — using the built-in voice.',d.error)}
   await browserSay(text,tid)}finally{sayPending--}})}
 function play(f,sr,text){if(T.eos){(T.eosToAudioMs||(T.eosToAudioMs=[])).push(Math.round(performance.now()-T.eos));T.eos=0}if(ac.state!=='running')ac.resume().catch(()=>{});const b=ac.createBuffer(1,f.length,sr);b.copyToChannel(f,0);const s=ac.createBufferSource();s.buffer=b;const an=ac.createAnalyser();s.connect(an);an.connect(ac.destination);playT=Math.max(playT,ac.currentTime+.05);s.start(playT);playT+=b.duration;sources.push(s);setState('speaking');T.spoken.push({engine:'kokoro',text,seconds:b.duration});
- const arr=new Uint8Array(256);(function m(){if(!sources.includes(s))return;an.getByteTimeDomainData(arr);let x=0;for(const v of arr)x=Math.max(x,Math.abs(v-128));level=x/400;requestAnimationFrame(m)})();
+ const arr=new Uint8Array(256);(function m(){if(!sources.includes(s))return;an.getByteTimeDomainData(arr);let x=0;for(const v of arr)x=Math.max(x,Math.abs(v-128));level=x/400;voiceLvl=Math.min(1,x/90);requestAnimationFrame(m)})();
  s.onended=()=>{sources=sources.filter(q=>q!==s);if(!sources.length&&st==='speaking'&&!thinkingNow)afterSpeak()}}
 function afterSpeak(){herEnd=Date.now();setState('idle');if(handsFree){autoStart=true;setTimeout(()=>{if(st==='idle')startListening()},iosEars?350:0)}}
 function stopPlay(){turnId++;for(const s of sources)try{s.stop()}catch{}sources=[];playT=0;try{speechSynthesis.cancel()}catch{}try{brain&&brain.interrupt()}catch{}ttsQ=Promise.resolve()}
@@ -315,6 +315,9 @@ const transcribe=async audio=>{const t0=performance.now();while(ok.ears===null&&
  if(ok.ears!==true||!sttW)return {text:'',error:'speech recognizer unavailable'};const s0=performance.now();
  const r=await new Promise(r=>{const id=++sid;sttPend[id]=r;sttW.postMessage({type:'run',audio,id});setTimeout(()=>{if(sttPend[id]){delete sttPend[id];r({text:'',error:'transcribe timeout'})}},20000)});
  const ms=Math.round(performance.now()-s0);(T.sttMs||(T.sttMs=[])).push(ms);dlog('transcribed',ms+'ms',JSON.stringify(r.text||r.error||''));return r};
+const HALLU=/^(m+|mm+h*m*|h+m+|u+h+|u+m+|a+h+|o+h+|you|thank you|thanks( for watching)?|\.+|,|-|…|\[.*\]|\(.*\)|\*.*\*|♪.*)[.!?,…]*$/i;
+function asrReject(t,rms){const c=(t||'').replace(/\[[^\]]*\]|\([^)]*\)/g,'').trim();if(!c)return 'empty';if(HALLU.test(c))return 'hallucination';const words=c.split(/\s+/).filter(w=>/[a-z]{2,}|^(i|a)$/i.test(w));if(words.length<2&&rms<.03)return 'short+quiet';return ''}
+function normalize(a){let pk=0;for(let i=0;i<a.length;i++){const v=Math.abs(a[i]);if(v>pk)pk=v}const g=pk>1e-4?Math.min(30,.9/pk):1;const o=new Float32Array(a.length);if(g!==1)for(let i=0;i<a.length;i++)o[i]=a[i]*g;else o.set(a);return{o,pk,g}}
 function goodText(t){return t&&t.length>1&&!/^\[.*\]$/.test(t)&&!/^\(.*\)$/.test(t)&&!/^(you|thank you)\.?$/i.test(t)}
 // Web Speech path
 let rec=null,recOn=false;
@@ -337,7 +340,7 @@ function webListen(){if(!SR){fail('This browser has no speech recognition yet; m
 // Whisper + VAD path
 let vad=null,vadP=null;
 let segOverHer=false,herEnd=0,micOpens=0;const BARGE=+(Q.get('barge')||.06);
-let micDenied=false,gestureNow=false;function openMic(){if(micDenied&&!gestureNow)return Promise.reject(Object.assign(new Error('mic denied; waiting for a tap'),{name:'NotAllowedError'}));micOpens++;T.micOpens=micOpens;dlog('getUserMedia open #'+micOpens);return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}}).then(s=>{micDenied=false;s.getAudioTracks().forEach(t=>t.onended=()=>{dlog('mic track ended');T.micEnded=(T.micEnded||0)+1;micStream=null});return s},e=>{if(e&&e.name==='NotAllowedError'){micDenied=true;fail(micHelp(),String(e))}else fail('Microphone error: '+(e&&e.message),String(e));throw e})}
+let micDenied=false,gestureNow=false;function openMic(){if(micDenied&&!gestureNow)return Promise.reject(Object.assign(new Error('mic denied; waiting for a tap'),{name:'NotAllowedError'}));micOpens++;T.micOpens=micOpens;dlog('getUserMedia open #'+micOpens);return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}}).then(s=>{micDenied=false;try{const tr=s.getAudioTracks()[0],ss=tr.getSettings?tr.getSettings():{};dlog('mic device',JSON.stringify(tr.label||'?'),'sr',ss.sampleRate||'?','ns',ss.noiseSuppression,'agc',ss.autoGainControl,'muted',tr.muted);T.micLabel=tr.label}catch{}s.getAudioTracks().forEach(t=>t.onended=()=>{dlog('mic track ended');T.micEnded=(T.micEnded||0)+1;micStream=null});return s},e=>{if(e&&e.name==='NotAllowedError'){micDenied=true;fail(micHelp(),String(e))}else fail('Microphone error: '+(e&&e.message),String(e));throw e})}
 function ensureVAD(){if(vadP)return vadP;vadP=(async()=>{if(!window.vad||!window.vad.MicVAD)throw new Error('voice-activity library did not load');
  const base='https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/';
  vad=await window.vad.MicVAD.new({baseAssetPath:base,onnxWASMBasePath:'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/',model:'v5',startOnLoad:false,submitUserSpeechOnPause:true,
@@ -352,14 +355,14 @@ function ensureVAD(){if(vadP)return vadP;vadP=(async()=>{if(!window.vad||!window
  vadP.catch(e=>{vadP=null;if(e&&e.name==='NotAllowedError')return;fail('Voice detection failed to start. Tap TALK to retry.',String(e))});return vadP}
 async function endTurn(audio){hearing=false;segBuf=[];lastHeard=Date.now();let e=0;for(let i=0;i<audio.length;i++)e+=audio[i]*audio[i];const rms=Math.sqrt(e/audio.length);
    if(segOverHer||st==='speaking'){if(rms<BARGE){T.echoIgnored=(T.echoIgnored||0)+1;dlog('ignored sound over her voice rms',rms.toFixed(3));return}dlog('barge-in rms',rms.toFixed(3));stopPlay()}
-   T.eos=performance.now();dlog('end of speech',Math.round(audio.length/16)+'ms rms',rms.toFixed(3));if(!handsFree){vad.pause();vadOn=false}setState('thinking');status('Understanding…');const r=await transcribe(audio);if(r.error)fail('Speech recognizer error.',r.error);const t=(r.text||'').trim();
+   T.eos=performance.now();const NZ=normalize(audio);dlog('end of speech',Math.round(audio.length/16)+'ms rms',rms.toFixed(3),'peak',NZ.pk.toFixed(3),'gain',NZ.g.toFixed(1));audio=NZ.o;if(!handsFree){vad.pause();vadOn=false}setState('thinking');status('Understanding…');const r=await transcribe(audio);if(r.error)fail('Speech recognizer error.',r.error);const t=(r.text||'').trim();const rj=asrReject(t,rms);if(rj){dlog('asr rejected: '+JSON.stringify(t)+' rms='+rms.toFixed(4)+' ('+rj+')');T.asrRejected=(T.asrRejected||0)+1;status('');setState('idle');startListening();return}if(caps)$('you').textContent=t;
    dlog('heard',JSON.stringify(t.slice(0,60)),'asr',Math.round(performance.now()-T.eos)+'ms');if(goodText(t)){status('');respond(t)}else{status("I didn't catch that — tap TALK and try again.");setState('idle');if(handsFree)startListening()}}
 // v8: energy end-of-speech fallback, max utterance, frame watchdog — never rely only on Silero
-const E={frames:0,last:0,floor:.004,rms:0,stalls:0,rebuilds:0};let hearT0=0,lastLoud=0,segBuf=[],preBuf=[];T.E=E;
+const E={frames:0,last:0,floor:.004,rms:0,peak:0,stalls:0,rebuilds:0};let hearT0=0,lastLoud=0,segBuf=[],preBuf=[];T.E=E;
 const SIL_MS=+(Q.get('silms')||850),MAX_UTT=+(Q.get('maxutt')||12000);
 function vadSR(){try{return vad&&vad._audioContext?vad._audioContext.sampleRate:(vad&&vad.audioContext&&vad.audioContext.sampleRate)||'?'}catch{return '?'}}
 function vadCtx(){try{const c=vad&&(vad._audioContext||vad.audioContext);return c?c.state:'?'}catch{return '?'}}
-function onFrame(p,f){const now=Date.now();E.frames++;E.last=now;if(!f||!f.length)return;let e=0;for(let i=0;i<f.length;i++)e+=f[i]*f[i];const r=Math.sqrt(e/f.length);E.rms=r;
+function onFrame(p,f){const now=Date.now();E.frames++;E.last=now;if(!f||!f.length)return;let e=0;for(let i=0;i<f.length;i++)e+=f[i]*f[i];const r=Math.sqrt(e/f.length);E.rms=r;if(r>E.peak)E.peak=r;
  if(!hearing){E.floor=r<E.floor?E.floor*.8+r*.2:E.floor*.995+r*.005;preBuf.push(f.slice());if(preBuf.length>8)preBuf.shift();return}
  segBuf.push(f.slice());const loud=r>Math.max(E.floor*3,E.floor+.006)||(p&&p.isSpeech>.6);if(loud)lastLoud=now;
  if(now-hearT0>350&&now-lastLoud>SIL_MS)forceEnd('energy silence '+(now-lastLoud)+'ms floor '+E.floor.toFixed(4));
@@ -368,7 +371,7 @@ function forceEnd(why){if(!hearing)return;const n=segBuf.reduce((a,b)=>a+b.lengt
  dlog('forced end of speech:',why,'frames',segBuf.length);T.forced=(T.forced||0)+1;try{vad&&vad.frameProcessor&&vad.frameProcessor.reset()}catch{}
  if(n<16000*.25){hearing=false;segBuf=[];dlog('forced segment too short, dropped');if(st==='listening')status('');return}endTurn(a)}
 let lastStat=0;setInterval(async()=>{if(!vad||!vadOn)return;const now=Date.now();
- if(now-lastStat>10000){lastStat=now;dlog('mic stats frames',E.frames,'rms',E.rms.toFixed(4),'floor',E.floor.toFixed(4),'ctx',vadCtx(),'st',st)}
+ if(now-lastStat>10000){lastStat=now;dlog('mic stats frames',E.frames,'rms',E.rms.toFixed(4),'peak10s',E.peak.toFixed(4),'sr',vadSR(),'floor',E.floor.toFixed(4),'ctx',vadCtx(),'st',st);E.peak=0}
  if(hearing&&now-hearT0>MAX_UTT+1000)forceEnd('hearing timeout');
  if(now-E.last>1500&&E.last){E.stalls++;dlog('no audio frames for',now-E.last,'ms ctx',vadCtx(),'track',micStream?micStream.getAudioTracks().map(t=>t.readyState).join():'none');
   if(hearing)forceEnd('frames stopped');
@@ -399,7 +402,7 @@ $('go').onclick=()=>unlock();
 function warm(){if(!cloudOn)return;const ping=()=>{for(const u of ['https://text.pollinations.ai/models','https://api.llm7.io/v1/models'])fetch(u,{cache:'no-store'}).catch(()=>{})};ping();setInterval(()=>{if(document.visibilityState==='visible')ping()},40000)}
 let ackBuf=null;function prepAck(){if(ackBuf||ok.voice!==true||!ttsW)return;const id=++nid;pend[id]=d=>{if(d.audio&&d.audio.length)ackBuf=d};ttsW.postMessage({type:'say',text:'Mm.',id})}
 setInterval(prepAck,2000);
-function maybeAck(tid){setTimeout(()=>{if(tid===turnId&&st==='thinking'&&!sources.length&&ackBuf&&ac){T.acks=(T.acks||0)+1;const b=ac.createBuffer(1,ackBuf.audio.length,ackBuf.sr);b.copyToChannel(ackBuf.audio,0);const s=ac.createBufferSource();s.buffer=b;const gn=ac.createGain();gn.gain.value=.55;s.connect(gn);gn.connect(ac.destination);s.start()}},1100)}
+function maybeAck(tid){if(Q.get('ack')!=='1')return;setTimeout(()=>{if(tid===turnId&&st==='thinking'&&!sources.length&&ackBuf&&ac){T.acks=(T.acks||0)+1;const b=ac.createBuffer(1,ackBuf.audio.length,ackBuf.sr);b.copyToChannel(ackBuf.audio,0);const s=ac.createBufferSource();s.buffer=b;const gn=ac.createGain();gn.gain.value=.55;s.connect(gn);gn.connect(ac.destination);s.start()}},1100)}
 $('talk').onclick=()=>{gestureNow=true;setTimeout(()=>gestureNow=false,1500);if(!begun)unlock();if(ac&&ac.state!=='running')ac.resume().catch(()=>{});
  if(st==='listening'){if(hearing){forceEnd('talk tap');return}stopListening();return}
  if(st==='speaking'||st==='thinking'){stopPlay();setState('idle');if(!handsFree)return}
