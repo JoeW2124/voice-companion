@@ -1,7 +1,7 @@
 // Voice companion v2 — every failure is shown on screen; WebGPU fast path, CPU (wllama) fallback.
-import { load, save } from "./memory.js?v=7";
+import { load, save } from "./memory.js?v=8";
 if(window.__resetting)throw new Error('resetting');
-const VERSION='v7';
+const VERSION='v8';
 const $=id=>document.getElementById(id);
 const norm=x=>String(x).toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
 const Q=new URLSearchParams(location.search);
@@ -26,11 +26,11 @@ let quietT=0;const wake=()=>{document.body.classList.remove('quiet');clearTimeou
 let st='idle',level=0,handsFree=Q.get('hf')!=='0',caps=true,ac=null,micStream=null,turnId=0,sources=[],playT=0,mem={name:null,nameReason:null,facts:[],reflections:[],history:[],lastSeen:null};
 function setState(s){if(s!==st)dlog('state',s);st=s;$('state').textContent={idle:handsFree?'LISTENING · HANDS-FREE':'READY — TAP TALK',listening:'LISTENING — TAP TO STOP',thinking:'THINKING',speaking:'SPEAKING — TAP TO INTERRUPT'}[s]||s;$('talk').classList.toggle('on',s!=='idle');$('talk').textContent={idle:'TALK',listening:'STOP',thinking:'…',speaking:'STOP'}[s]||'TALK'}
 // ---------- visual: cosmic neural mind (brain.js) ----------
-import { createBrain } from "./brain.js?v=7";
+import { createBrain } from "./brain.js?v=8";
 function createOrb(cv,getSt){const g=cv.getContext('2d');let lv=()=>0;const dpr=Math.min(2,devicePixelRatio||1);(function f(t){cv.width=innerWidth*dpr;cv.height=innerHeight*dpr;const x=cv.width/2,y=cv.height*.42,r=Math.min(cv.width,cv.height)*(.12+lv()*.15+(getSt()==='thinking'?.02*Math.sin(t/150):0));const gr=g.createRadialGradient(x,y,0,x,y,r*2.2);gr.addColorStop(0,'#e8fdff');gr.addColorStop(.25,'#5fe3ffcc');gr.addColorStop(1,'#0000');g.fillStyle='#02030a';g.fillRect(0,0,cv.width,cv.height);g.fillStyle=gr;g.fillRect(0,0,cv.width,cv.height);requestAnimationFrame(f)})(0);
  return {setGraph(){},ignite(){},think(){},hit(){return null},setLevel(f){lv=f}}}
 let mind;try{if(SAFE)throw new Error('safe mode');mind=createBrain($('cv'),()=>st);dlog('galaxy ok')}catch(e){dlog('galaxy off:',String(e));mind=createOrb($('cv'),()=>st)}mind.setLevel(()=>level);
-$('cv').addEventListener('click',e=>{try{const n=mind.hit(e.clientX,e.clientY);if(n)T.tapped=n.label}catch(err){dlog('hit err',String(err))}});
+$('cv').addEventListener('click',e=>{if(st==='listening'&&hearing){forceEnd('orb tap');return}try{const n=mind.hit(e.clientX,e.clientY);if(n)T.tapped=n.label}catch(err){dlog('hit err',String(err))}});
 
 // ---------- loading state ----------
 const prog={brain:0,ears:0,voice:0};const ok={brain:null,ears:null,voice:null};// null=loading,true,false
@@ -97,18 +97,18 @@ function ensureLocal(){if(localP)return localP;need.brain=true;ok.brain=null;pro
 // Cloud mind: free, keyless, open-weight models. Primary: gpt-oss-20b (Apache 2.0) via Pollinations.
 // Backup: Mistral Nemo 12B (Apache 2.0) via LLM7. Both keyless with CORS. A provider that times out or rate-limits rests for a while.
 const PROVIDERS=[
- {id:'pollinations',label:'gpt-oss-20b',url:Q.get('cloud')||'https://text.pollinations.ai/openai',model:'openai-fast',extra:{reasoning_effort:'low'},first:7000,rest:0},
- {id:'llm7',label:'mistral-nemo',url:Q.get('cloud2')||'https://api.llm7.io/v1/chat/completions',model:'mistral-Nemo-Instruct-2407',extra:{},first:5000,rest:0}];
+ {id:'pollinations',label:'gpt-oss-20b',url:Q.get('cloud')||'https://text.pollinations.ai/openai',model:'openai-fast',extra:{reasoning_effort:'low'},first:6000,rest:0},
+ {id:'llm7',label:'mistral-nemo',url:Q.get('cloud2')||'https://api.llm7.io/v1/chat/completions',model:'mistral-Nemo-Instruct-2407',extra:{},first:6000,rest:0}];
 if(Q.get('prov')!=='pollinations')PROVIDERS.reverse();// fast Mistral Nemo answers; gpt-oss does the background learning
 const CLOUD_URL=PROVIDERS[0].url;
-const LLM7_PREF=['mistral-Nemo-Instruct-2407','mistral-Small-24B-Instruct-2501','gpt-oss:20b','L3-8B-Lunaris-v1-Turbo','nemotron-3-nano:30b'];let llm7Bad=new Set();
+const LLM7_PREF=['mistral-Nemo-Instruct-2407','gpt-oss:20b','nemotron-3-nano:30b','mistral-Small-24B-Instruct-2501','L3-8B-Lunaris-v1-Turbo'];let llm7Bad=new Set();
 function pickLLM7(list){const P=PROVIDERS.find(p=>p.id==='llm7');const ids=list||P.list||LLM7_PREF;const m=LLM7_PREF.find(x=>ids.includes(x)&&!llm7Bad.has(x));if(m){if(m!==P.model)dlog('llm7 model ->',m);P.model=m;return true}return false}
-async function refreshLLM7(){try{const ctl=new AbortController();setTimeout(()=>ctl.abort(),4000);const r=await fetch('https://api.llm7.io/v1/models',{signal:ctl.signal,cache:'no-store'});const j=await r.json();const ids=(j.data||j).map(m=>m.id);PROVIDERS.find(p=>p.id==='llm7').list=ids;if(!pickLLM7(ids))PROVIDERS.find(p=>p.id==='llm7').rest=Date.now()+6e5;dlog('llm7 models ok',ids.length)}catch(e){dlog('llm7 models fetch failed',String(e))}}
+async function refreshLLM7(){try{const ctl=new AbortController();setTimeout(()=>ctl.abort(),4000);const r=await fetch('https://api.llm7.io/v1/models',{signal:ctl.signal,cache:'no-store'});const j=await r.json();const all=(j.data||j);const ids=all.filter(m=>!m.tier||m.tier!=='pro').map(m=>m.id);PROVIDERS.find(p=>p.id==='llm7').list=ids;if(!pickLLM7(ids))PROVIDERS.find(p=>p.id==='llm7').rest=Date.now()+6e5;dlog('llm7 models ok',ids.length)}catch(e){dlog('llm7 models fetch failed',String(e))}}
 const cloudOn=Q.get('brain')!=='local';let cloudDownUntil=0,cloudCtl=null,fgOn=0,cloudBusy=false,lastFgEnd=0;
 let bgCtlNow=null;async function* provGen(P,msgs,max,temp,bg){const ctl=new AbortController();if(!bg)cloudCtl=ctl;else bgCtlNow=ctl;let firstTimer=setTimeout(()=>ctl.abort('timeout'),bg?12000:P.first);
  let r;try{r=await fetch(P.url,{method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,body:JSON.stringify({model:P.model,messages:msgs,stream:true,temperature:temp,max_tokens:P.id==='llm7'?Math.round(max*1.3):Math.max(400,max*4),seed:Math.floor(Math.random()*1e9),...P.extra})})}
  catch(e){clearTimeout(firstTimer);dlog('cloud',P.id,ctl.signal.aborted?'timeout':'network',String(e));throw new Error(P.id+' '+(ctl.signal.aborted?'timeout':'network'))}
- if(!r.ok||!r.body){clearTimeout(firstTimer);let tx='';try{tx=(await r.text()).slice(0,200)}catch{}if(P.id==='llm7'&&/model|unavailable|not.?found/i.test(tx)&&r.status!==429){llm7Bad.add(P.model);pickLLM7()}dlog('cloud',P.id,P.model,'HTTP',r.status,tx.slice(0,120));(T.cloudErr||(T.cloudErr=[])).push(P.id+' '+r.status+' '+tx.slice(0,90));throw new Error(P.id+' HTTP '+r.status+(P.id==='llm7'&&/model|unavailable|not.?found/i.test(tx)&&r.status!==429?' badmodel':''))}
+ if(!r.ok||!r.body){clearTimeout(firstTimer);let tx='';try{tx=(await r.text()).slice(0,200)}catch{}if(P.id==='llm7'&&(/model|unavailable|not.?found|tier|auth|key/i.test(tx)||[401,402,403,404].includes(r.status))&&r.status!==429){llm7Bad.add(P.model);pickLLM7()}dlog('cloud',P.id,P.model,'HTTP',r.status,tx.slice(0,120));(T.cloudErr||(T.cloudErr=[])).push(P.id+' '+r.status+' '+tx.slice(0,90));throw new Error(P.id+' HTTP '+r.status+(P.id==='llm7'&&(/model|unavailable|not.?found|tier|auth|key/i.test(tx)||[401,402,403,404].includes(r.status))&&r.status!==429?' badmodel':''))}
  const rd=r.body.getReader(),dec=new TextDecoder();let buf='',got=false,idle=null;const arm=()=>{clearTimeout(idle);idle=setTimeout(()=>ctl.abort('stall'),15000)};
  try{for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
   while((i=buf.indexOf('\n'))>=0){const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')return;
@@ -119,18 +119,18 @@ let bgCtlNow=null;async function* provGen(P,msgs,max,temp,bg){const ctl=new Abor
  if(!got)throw new Error(P.id+' returned no text')}
 const cloud={name:'cloud',interrupt:()=>{try{cloudCtl&&cloudCtl.abort()}catch{}},
  async *gen(msgs,max,temp=.8,bg=false){if(bg){while(fgOn||cloudBusy)await new Promise(r=>setTimeout(r,300));cloudBusy=true}else fgOn++;
-  try{let last=null;if(!bg&&bgCtlNow){try{bgCtlNow.abort('preempt')}catch{}dlog('preempted background job')}const now=Date.now();const order=bg?PROVIDERS.filter(a=>a.id==='pollinations'):[...PROVIDERS].sort((a,b)=>(now<a.rest)-(now<b.rest));let retried=false;const allRest=order.every(q=>Date.now()<q.rest);for(const P of order){if(bg&&Date.now()<P.rest)continue;let got=false;const t0=performance.now();
+  try{let last=null;if(!bg&&bgCtlNow){try{bgCtlNow.abort('preempt')}catch{}dlog('preempted background job')}const now=Date.now();const order=bg?PROVIDERS.filter(a=>a.id==='pollinations'):[...PROVIDERS].sort((a,b)=>(now<a.rest)-(now<b.rest));let retried=false,passed=false;PROVIDERS.forEach(q=>q._alt=false);const allRest=order.every(q=>Date.now()<q.rest);for(const P of order){if(bg&&Date.now()<P.rest)continue;let got=false;const t0=performance.now();
     try{for await(const t of provGen(P,msgs,max,temp,bg)){if(!got){got=true;T.provider=P.id;P._c429=false;if(!bg)dlog('cloud first token',P.id,P.model,Math.round(performance.now()-t0)+'ms');if(!bg)(T.provFirst||(T.provFirst=[])).push([P.id,Math.round(performance.now()-t0)])}yield t}if(got)return}
     catch(e){if(got)return;last=e;if(/badmodel/.test(e.message)&&!retried&&!llm7Bad.has(P.model)){retried=true;order.splice(order.indexOf(P)+1,0,P);continue}
-    if(!bg&&P.id==='llm7'&&/HTTP 429/.test(e.message)&&!P._c429){P._c429=true;dlog('llm7 busy, retrying in 1.2 s');await new Promise(z=>setTimeout(z,1200));order.splice(order.indexOf(P)+1,0,P);continue}P._c429=false;console.warn('cloud',e);(T.cloudErr||(T.cloudErr=[])).push(String(e.message||e));P.rest=Date.now()+(/429/.test(e.message)?20000:/timeout/.test(e.message)?40000:10000)}}
+    if(!bg&&P.id==='llm7'&&/HTTP 429/.test(e.message)&&!P._c429){P._c429=true;dlog('llm7 busy, retrying in 1.2 s');await new Promise(z=>setTimeout(z,1200));order.splice(order.indexOf(P)+1,0,P);continue}P._c429=false;if(!bg&&P.id==='llm7'&&!P._alt){const cur=P.model;llm7Bad.add(cur);if(pickLLM7()){P._alt=true;dlog('llm7 retry with',P.model);llm7Bad.delete(cur);order.splice(order.indexOf(P)+1,0,P);continue}llm7Bad.delete(cur)}if(!bg&&!passed&&order.indexOf(P)===order.length-1){passed=true;dlog('cloud: second pass');for(const q of [...new Set(order)])order.push(q);continue}console.warn('cloud',e);(T.cloudErr||(T.cloudErr=[])).push(String(e.message||e));P.rest=Date.now()+(/429/.test(e.message)?20000:/timeout/.test(e.message)?40000:10000)}}
    throw last||new Error('all cloud minds resting')}
   finally{if(bg)cloudBusy=false;else{fgOn--;lastFgEnd=Date.now()}}}};
-let usingLocal=false;const allowLocal=Q.get('local')==='1'||!(isIOS||SAFE);
+let usingLocal=false;const allowLocal=Q.get('local')==='1';
 async function* think(msgs,max,temp,bg){
  if(cloudOn&&Date.now()>cloudDownUntil){let got=false;const t0=performance.now();
   try{for await(const t of cloud.gen(msgs,max,temp,bg)){if(!got){got=true;T.cloudFirstMs=(T.cloudFirstMs||[]);if(!bg)T.cloudFirstMs.push(Math.round(performance.now()-t0))}usingLocal=false;yield t}T.cloudOk=(T.cloudOk||0)+1;return}
-  catch(e){if(got)return;if(bg)throw e;T.cloudFails=(T.cloudFails||0)+1;cloudDownUntil=Date.now()+20000;if(!bg)status(allowLocal?'Cloud minds unreachable — using my on-device mind for now…':'Cloud minds unreachable — check your connection.')}}
- if(!allowLocal){if(bg)return;dlog('all cloud minds failed; no local mind on this device');yield "Sorry, my mind just blipped. The connection dropped. Say that again?";return}
+  catch(e){if(got)return;if(bg)throw e;T.cloudFails=(T.cloudFails||0)+1;dlog('cloud failed all',String(e&&e.message),(T.cloudErr||[]).slice(-6).join(' | '));if(!bg)status(allowLocal?'Cloud minds unreachable — using my on-device mind for now…':'Cloud minds unreachable — check your connection.')}}
+ if(!allowLocal){if(bg)return;dlog('all cloud minds failed; no local mind on this device');yield ["Hm, I lost my thread for a second. Say that again?","Sorry, my thoughts scattered just then. One more time?","Wait, I drifted off. What did you say?"][Math.floor(Math.random()*3)];return}
  if(bg&&!local)return;// don't download the local model just for memory chores
  usingLocal=true;if(!bg&&msgs[0]&&msgs[0].role==='system')msgs=[{role:'system',content:sys()},...msgs.slice(1)];if(!local){status(`Loading my on-device mind${pct('brain')?' ('+pct('brain')+'%)':''}…`)}
  const L=await ensureLocal();if(!L)throw new Error('no mind available');for await(const t of L.gen(msgs,Math.min(max,110),temp))yield t}
@@ -145,8 +145,8 @@ function mkWorker(file,k){let w;try{w=new Worker(file,{type:'module'})}catch(e){
  w.addEventListener('message',e=>{const m=e.data;if(m.type==='progress'&&m.p&&m.p.progress!=null)prog[k]=m.p.progress/100;if(m.type==='ready'){ok[k]=true;prog[k]=1;T[k]=m.device}if(m.type==='error'){ok[k]=false;prog[k]=1;fail(k==='voice'?'Natural voice failed to load — using the built-in voice.':'Speech recognizer failed to load.',m.error)}});return w}
 const wantGPUworkers=gpuOK&&!mobile;
 const voiceMode=Q.get('voice')||(SAFE?'native':'kokoro');T.voiceMode=voiceMode;dlog('voice mode',voiceMode,'ears',earsMode);
-let ttsW=null;if(voiceMode==='kokoro'){ttsW=mkWorker('tts-worker.js?v=7','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers})}else{need.voice=false;ok.voice=false;prog.voice=1}
-let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=7','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers,model:Q.get('asr')||(mobile?'onnx-community/whisper-tiny.en':'onnx-community/whisper-base.en')})}
+let ttsW=null;if(voiceMode==='kokoro'){ttsW=mkWorker('tts-worker.js?v=8','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers})}else{need.voice=false;ok.voice=false;prog.voice=1}
+let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=8','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers,model:Q.get('asr')||(mobile?'onnx-community/whisper-tiny.en':'onnx-community/whisper-base.en')})}
 
 // ---------- persona + growing memory ----------
 const SEED=['Joseph runs Red Line Hockey Co., selling hockey digital products and hats','Joseph plays for and runs the Three Mile Islanders hockey team and its Facebook page','Joseph lives in the America/New_York time zone'];
@@ -341,17 +341,42 @@ let micDenied=false,gestureNow=false;function openMic(){if(micDenied&&!gestureNo
 function ensureVAD(){if(vadP)return vadP;vadP=(async()=>{if(!window.vad||!window.vad.MicVAD)throw new Error('voice-activity library did not load');
  const base='https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/';
  vad=await window.vad.MicVAD.new({baseAssetPath:base,onnxWASMBasePath:'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/',model:'v5',startOnLoad:false,submitUserSpeechOnPause:true,
-  redemptionMs:700,minSpeechMs:300,preSpeechPadMs:250,positiveSpeechThreshold:.6,negativeSpeechThreshold:.4,
+  redemptionMs:700,minSpeechMs:300,preSpeechPadMs:250,positiveSpeechThreshold:.6,negativeSpeechThreshold:+(Q.get('neg')||.4),
   getStream:async()=>micStream||(micStream=await openMic()),
   pauseStream:async()=>{},resumeStream:async s=>s,
-  onFrameProcessed:p=>{if(st!=='speaking')level=p.isSpeech*.15},
-  onSpeechStart:()=>{hearing=true;lastHeard=Date.now();if(bgCtlNow){try{bgCtlNow.abort('user speaking')}catch{}}segOverHer=st==='speaking'||Date.now()-herEnd<400;if(!segOverHer){if(st==='thinking')stopPlay();setState('listening');status('Hearing you…')}},
-  onVADMisfire:()=>{hearing=false},
-  onSpeechEnd:async audio=>{hearing=false;lastHeard=Date.now();let e=0;for(let i=0;i<audio.length;i++)e+=audio[i]*audio[i];const rms=Math.sqrt(e/audio.length);
+  onFrameProcessed:(p,f)=>{if(st!=='speaking')level=p.isSpeech*.15;onFrame(p,f)},
+  onSpeechStart:()=>{if(hearing)return;hearing=true;hearT0=Date.now();lastLoud=Date.now();segBuf=preBuf.slice();dlog('vad speech start frames',E.frames,'floor',E.floor.toFixed(4),'sr',vadSR(),'ctx',vadCtx());lastHeard=Date.now();if(bgCtlNow){try{bgCtlNow.abort('user speaking')}catch{}}segOverHer=st==='speaking'||Date.now()-herEnd<400;if(!segOverHer){if(st==='thinking')stopPlay();setState('listening');status('Hearing you…')}},
+  onVADMisfire:()=>{dlog('vad misfire');hearing=false;segBuf=[]},
+  onSpeechEnd:async audio=>{if(!hearing){dlog('vad end ignored (turn already ended)');return}dlog('vad speech end (silero)');endTurn(audio)}});return vad})();
+ vadP.then(v=>{dlog('vad ready sr',vadSR(),'ctx',vadCtx())},()=>{});
+ vadP.catch(e=>{vadP=null;if(e&&e.name==='NotAllowedError')return;fail('Voice detection failed to start. Tap TALK to retry.',String(e))});return vadP}
+async function endTurn(audio){hearing=false;segBuf=[];lastHeard=Date.now();let e=0;for(let i=0;i<audio.length;i++)e+=audio[i]*audio[i];const rms=Math.sqrt(e/audio.length);
    if(segOverHer||st==='speaking'){if(rms<BARGE){T.echoIgnored=(T.echoIgnored||0)+1;dlog('ignored sound over her voice rms',rms.toFixed(3));return}dlog('barge-in rms',rms.toFixed(3));stopPlay()}
    T.eos=performance.now();dlog('end of speech',Math.round(audio.length/16)+'ms rms',rms.toFixed(3));if(!handsFree){vad.pause();vadOn=false}setState('thinking');status('Understanding…');const r=await transcribe(audio);if(r.error)fail('Speech recognizer error.',r.error);const t=(r.text||'').trim();
-   if(goodText(t)){status('');respond(t)}else{status("I didn't catch that — tap TALK and try again.");setState('idle')}}});return vad})();
- vadP.catch(e=>{vadP=null;if(e&&e.name==='NotAllowedError')return;fail('Voice detection failed to start. Tap TALK to retry.',String(e))});return vadP}
+   dlog('heard',JSON.stringify(t.slice(0,60)),'asr',Math.round(performance.now()-T.eos)+'ms');if(goodText(t)){status('');respond(t)}else{status("I didn't catch that — tap TALK and try again.");setState('idle');if(handsFree)startListening()}}
+// v8: energy end-of-speech fallback, max utterance, frame watchdog — never rely only on Silero
+const E={frames:0,last:0,floor:.004,rms:0,stalls:0,rebuilds:0};let hearT0=0,lastLoud=0,segBuf=[],preBuf=[];T.E=E;
+const SIL_MS=+(Q.get('silms')||850),MAX_UTT=+(Q.get('maxutt')||12000);
+function vadSR(){try{return vad&&vad._audioContext?vad._audioContext.sampleRate:(vad&&vad.audioContext&&vad.audioContext.sampleRate)||'?'}catch{return '?'}}
+function vadCtx(){try{const c=vad&&(vad._audioContext||vad.audioContext);return c?c.state:'?'}catch{return '?'}}
+function onFrame(p,f){const now=Date.now();E.frames++;E.last=now;if(!f||!f.length)return;let e=0;for(let i=0;i<f.length;i++)e+=f[i]*f[i];const r=Math.sqrt(e/f.length);E.rms=r;
+ if(!hearing){E.floor=r<E.floor?E.floor*.8+r*.2:E.floor*.995+r*.005;preBuf.push(f.slice());if(preBuf.length>8)preBuf.shift();return}
+ segBuf.push(f.slice());const loud=r>Math.max(E.floor*3,E.floor+.006)||(p&&p.isSpeech>.6);if(loud)lastLoud=now;
+ if(now-hearT0>350&&now-lastLoud>SIL_MS)forceEnd('energy silence '+(now-lastLoud)+'ms floor '+E.floor.toFixed(4));
+ else if(now-hearT0>MAX_UTT)forceEnd('max utterance '+MAX_UTT+'ms')}
+function forceEnd(why){if(!hearing)return;const n=segBuf.reduce((a,b)=>a+b.length,0);const a=new Float32Array(n);let o=0;for(const b of segBuf){a.set(b,o);o+=b.length}
+ dlog('forced end of speech:',why,'frames',segBuf.length);T.forced=(T.forced||0)+1;try{vad&&vad.frameProcessor&&vad.frameProcessor.reset()}catch{}
+ if(n<16000*.25){hearing=false;segBuf=[];dlog('forced segment too short, dropped');if(st==='listening')status('');return}endTurn(a)}
+let lastStat=0;setInterval(async()=>{if(!vad||!vadOn)return;const now=Date.now();
+ if(now-lastStat>10000){lastStat=now;dlog('mic stats frames',E.frames,'rms',E.rms.toFixed(4),'floor',E.floor.toFixed(4),'ctx',vadCtx(),'st',st)}
+ if(hearing&&now-hearT0>MAX_UTT+1000)forceEnd('hearing timeout');
+ if(now-E.last>1500&&E.last){E.stalls++;dlog('no audio frames for',now-E.last,'ms ctx',vadCtx(),'track',micStream?micStream.getAudioTracks().map(t=>t.readyState).join():'none');
+  if(hearing)forceEnd('frames stopped');
+  try{const c=vad._audioContext||vad.audioContext;if(c&&c.state!=='running'){await c.resume();dlog('resumed ctx ->',c.state)}}catch(e){dlog('resume failed',String(e))}
+  if(now-E.last>3500){E.rebuilds++;dlog('rebuilding mic graph');const old=vad;vad=null;vadP=null;vadOn=false;E.last=0;try{await old.destroy()}catch{}
+   if(micStream&&!micStream.getAudioTracks().some(t=>t.readyState==='live'))micStream=null;
+   try{const v=await ensureVAD();await v.start();vadOn=true;E.last=Date.now();dlog('mic graph rebuilt')}catch(e){dlog('rebuild failed',String(e))}}
+  else E.last=now-1600}},500);
 async function startListening(){
  if(earsMode==='web')return webListen();
  if(micDenied&&!gestureNow){setState('idle');return}
@@ -376,7 +401,7 @@ let ackBuf=null;function prepAck(){if(ackBuf||ok.voice!==true||!ttsW)return;cons
 setInterval(prepAck,2000);
 function maybeAck(tid){setTimeout(()=>{if(tid===turnId&&st==='thinking'&&!sources.length&&ackBuf&&ac){T.acks=(T.acks||0)+1;const b=ac.createBuffer(1,ackBuf.audio.length,ackBuf.sr);b.copyToChannel(ackBuf.audio,0);const s=ac.createBufferSource();s.buffer=b;const gn=ac.createGain();gn.gain.value=.55;s.connect(gn);gn.connect(ac.destination);s.start()}},1100)}
 $('talk').onclick=()=>{gestureNow=true;setTimeout(()=>gestureNow=false,1500);if(!begun)unlock();if(ac&&ac.state!=='running')ac.resume().catch(()=>{});
- if(st==='listening'){stopListening();return}
+ if(st==='listening'){if(hearing){forceEnd('talk tap');return}stopListening();return}
  if(st==='speaking'||st==='thinking'){stopPlay();setState('idle');if(!handsFree)return}
  stopPlay();startListening()};
 $('hf').onclick=()=>{if(!begun)unlock();handsFree=!handsFree;$('hf').classList.toggle('on',handsFree);if(handsFree){status(isIOS&&earsMode==='web'?'Hands-free on. (On iPhone I re-listen after each reply.)':'Hands-free on.');startListening()}else{stopListening();setState('idle')}};
