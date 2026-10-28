@@ -2,7 +2,6 @@
 const KIND={fact:[120,230,255],self:[90,255,220],opinion:[190,150,255],emotion:[255,140,210],theme:[140,170,255],joke:[255,215,140],core:[200,250,255]};
 function sprite(rgb,sz=64){const c=document.createElement('canvas');c.width=c.height=sz;const g=c.getContext('2d'),r=sz/2,gr=g.createRadialGradient(r,r,0,r,r,r);
  gr.addColorStop(0,'rgba(255,255,255,1)');gr.addColorStop(.12,`rgba(${rgb},.9)`);gr.addColorStop(.35,`rgba(${rgb},.25)`);gr.addColorStop(1,`rgba(${rgb},0)`);g.fillStyle=gr;g.fillRect(0,0,sz,sz);return c}
-import { createPortrait } from './portrait.js?v=9';
 export function createBrain(cv,getState){
  const g=cv.getContext('2d');const dpr=Math.min(2,devicePixelRatio||1);let W=0,H=0,neb=null;
  const SP={};for(const k in KIND)SP[k]=sprite(KIND[k].join(','));const WHITE=sprite('255,255,255',32);
@@ -14,7 +13,8 @@ export function createBrain(cv,getState){
   for(let i=0;i<26;i++){const a=rnd()*6.28,d=rnd()**.7*S*.42,x=S/2+Math.cos(a)*d,y=S/2+Math.sin(a)*d*.75,r=S*(.08+rnd()*.22);const gr=n.createRadialGradient(x,y,0,x,y,r);
    gr.addColorStop(0,`rgba(${cols[i%cols.length]},${.05+rnd()*.06})`);gr.addColorStop(1,'rgba(0,0,0,0)');n.fillStyle=gr;n.fillRect(0,0,S,S)}return c}
  rs();addEventListener('resize',rs);
- let voiceF=()=>0,lastT=performance.now(),fts=[],face=null,flies=[];try{const q=new URLSearchParams(location.search);if(q.get('face')!=='0')face=createPortrait('liora.jpg?v=9',{quality:1,onload:()=>{window.__vc&&(__vc.face='ok')},onerror:()=>{face=null;window.__vc&&(__vc.face='missing')}})}catch{face=null}
+ let voiceF=()=>0,lastT=performance.now(),fts=[],flies=[];// v11: the face is a <video> layer (face-clips.js); here we only keep the galaxy clear around it
+ const face=null;// v11b: face is on the main screen only; the galaxy panel shows the full graph
  let graph={nodes:[],links:[]},rot=0,amp=0,anims=[],pulses=[],focus=new Set(),t0=performance.now(),tip=null,level=()=>0;
  function place(n,i){if(n.x!=null)return;const par=n.links&&n.links.length?graph.nodes.find(m=>m.id===n.links[0]&&m.x!=null):null;
   const arm=i%2,r=.14+Math.min(.82,Math.sqrt(i+1)*.085),a=arm*Math.PI+r*4.4+(Math.random()-.5)*.35,j=.03+Math.random()*.03;
@@ -30,16 +30,17 @@ export function createBrain(cv,getState){
   g.globalCompositeOperation='source-over';g.fillStyle='#02030a';g.fillRect(0,0,W,H);
   const cx=W/2,cy=H*.44,R=Math.min(W,H)*.46;
   // nebula (slow counter-rotation) + parallax stars
-  g.globalCompositeOperation='lighter';g.save();g.translate(cx,cy);g.rotate(-rot*.4);g.globalAlpha=.9+amp*.3;const S=neb.width*1.25;g.drawImage(neb,-S/2,-S/2,S,S);g.restore();g.globalAlpha=1;
-  for(const s of stars){const px=((s.x+rot*(.02+s.z*.06))%1)*W,py=s.y*H;const tw=.35+.65*Math.abs(Math.sin(t*(.6+s.z)+s.p));const sz=(1+s.z*2.2)*dpr;g.globalAlpha=tw*(.25+s.z*.6);g.drawImage(WHITE,px-sz*2,py-sz*2,sz*4,sz*4)}
-  const dt=Math.min(.1,(now-lastT)/1000);lastT=now;fts.push(dt);if(fts.length>90){const av=fts.reduce((a,b)=>a+b)/fts.length;fts=[];if(face&&av>1/32&&face.q===1){face.q=.5;window.__vc&&(__vc.faceQ='low')}}
+  g.globalCompositeOperation='lighter';g.save();g.translate(cx,cy);g.rotate(-rot*.4);const GAL=document.body.classList.contains('galaxy');g.globalAlpha=GAL?.9+amp*.3:.28;const S=neb.width*1.25;g.drawImage(neb,-S/2,-S/2,S,S);g.restore();g.globalAlpha=1;
+  for(const s of stars){const px=((s.x+rot*(.02+s.z*.06))%1)*W,py=s.y*H;const tw=.35+.65*Math.abs(Math.sin(t*(.6+s.z)+s.p));const sz=(1+s.z*2.2)*dpr;g.globalAlpha=tw*(.25+s.z*.6)*(GAL?1:.32);g.drawImage(WHITE,px-sz*2,py-sz*2,sz*4,sz*4)}
+  if(!GAL){lastT=now;return}// main screen: only faint nebula + drifting stars; full memory galaxy lives in the panel
+  const dt=Math.min(.1,(now-lastT)/1000);lastT=now;fts.push(dt);if(fts.length>90){const av=fts.reduce((a,b)=>a+b)/fts.length;fts=[];}
   const V=st==='speaking'?Math.min(1,(window.__vc&&__vc.forceVL!=null?__vc.forceVL:voiceF())):0;let FC=null;
   if(face&&face.ok){const fr=face.draw(g,W,H,cx,cy-H*.02,t,st,amp,V,SP,dpr,dt);FC=fr&&fr.center;g.globalCompositeOperation='lighter'}
   for(const d of dust){const [x,y]=proj(d,cx,cy,R);const sz=(2+d.b*3)*dpr*(1+amp*.4);g.globalAlpha=(.10+d.b*.22)*(.8+.2*Math.sin(t*.7+d.b*9));g.drawImage(SP[d.c],x-sz,y-sz,sz*2,sz*2)}
   {const cs=R*(.5+amp*.35)*(FC?.45:1);g.globalAlpha=(.35+amp*.4)*(FC?.12:1);g.drawImage(SP.core,cx-cs,cy-cs*.8,cs*2,cs*1.6)}
   g.globalAlpha=1;const P={};for(const n of graph.nodes)P[n.id]=n.kind==='core'?[cx,cy]:proj(n,cx,cy,R);
   // filaments, curved like spiral arms
-  g.lineWidth=.8*dpr;for(const l of graph.links){const a=P[l[0]],b=P[l[1]];if(!a||!b)continue;const age=(now-(l[2]||0))/1000;const fresh=Math.max(0,1-age/6);const f=focus.has(l[0])||focus.has(l[1]);
+  g.lineWidth=.8*dpr;const CORE=new Set(graph.nodes.filter(n=>n.kind==='core').map(n=>n.id));for(const l of graph.links){const a=P[l[0]],b=P[l[1]];if(!a||!b)continue;if(FC&&(CORE.has(l[0])||CORE.has(l[1])||Math.hypot((a[0]+b[0])/2-FC[0],(a[1]+b[1])/2-FC[1])<R*.55||Math.hypot(a[0]-FC[0],a[1]-FC[1])<R*.3||Math.hypot(b[0]-FC[0],b[1]-FC[1])<R*.3))continue;const age=(now-(l[2]||0))/1000;const fresh=Math.max(0,1-age/6);const f=focus.has(l[0])||focus.has(l[1]);
    const mx=(a[0]+b[0])/2+(a[1]-b[1])*.18,my=(a[1]+b[1])/2+(b[0]-a[0])*.18;g.strokeStyle=`rgba(110,225,255,${(.07+fresh*.5+(f?.12+amp*.25:0))*(FC&&(P[l[0]]===P[0]||l[0]===0||l[1]===0)?.25:1)})`;g.beginPath();g.moveTo(a[0],a[1]);g.quadraticCurveTo(mx,my,b[0],b[1]);g.stroke()}
   // thinking: pulses race along focused filaments
   if(st==='thinking'&&Math.random()<.35){const ls=graph.links.filter(l=>focus.size?(focus.has(l[0])||focus.has(l[1])):true);const l=ls[Math.random()*ls.length|0];if(l)pulses.push(Math.random()<.5?{a:l[0],b:l[1],t:now,dur:650}:{a:l[1],b:l[0],t:now,dur:650})}

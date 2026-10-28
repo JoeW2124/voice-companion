@@ -1,7 +1,8 @@
 // Voice companion v2 — every failure is shown on screen; WebGPU fast path, CPU (wllama) fallback.
-import { load, save } from "./memory.js?v=9";
+import { load, save } from "./memory.js?v=11";
+import { createFace } from "./face-clips.js?v=11";
 if(window.__resetting)throw new Error('resetting');
-const VERSION='v9';
+const VERSION='v11b';
 const $=id=>document.getElementById(id);
 const norm=x=>String(x).toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
 const Q=new URLSearchParams(location.search);
@@ -13,8 +14,12 @@ const T=window.__vc={version:VERSION,diag:[],log:[],spoken:[],heard:[],replies:[
 function dlog(...a){const t=new Date();const line=t.toTimeString().slice(0,8)+'.'+String(t.getMilliseconds()).padStart(3,'0')+' '+a.map(x=>typeof x==='string'?x:(x&&x.message)||JSON.stringify(x)).join(' ');T.diag.push(line.slice(0,400));if(T.diag.length>80)T.diag.shift();const b=document.getElementById('dgl');if(b&&b.offsetParent)b.textContent=T.diag.join('\n')}
 T.dlog=dlog;for(const k of ['warn','error']){const o=console[k].bind(console);console[k]=(...a)=>{try{dlog(k.toUpperCase(),...a.map(String))}catch{}o(...a)}}
 dlog('boot',VERSION,navigator.userAgent,'safe='+SAFE);
-function status(msg){$('msg').textContent=msg||'';$('msg').className='';T.log.push(msg);if(msg)dlog('status',msg)}
-function fail(msg,detail){$('msg').textContent=msg;$('msg').className='err';T.errors.push(msg+(detail?' | '+detail:''));console.warn('FAIL '+msg,detail||'')}
+function alarm(code,msg){const b=$('big');if(!b)return;if(!code){b.textContent='';b.style.display='none';T.alarm='';return}b.textContent=code+(msg?' — '+msg:'');b.style.display='block';T.alarm=code;dlog('ALARM',code,msg||'')}
+// v10: keep models warm so the first real turn doesn't pay shader/wasm compile cost
+function warmWorker(k,w){const go=()=>{const t0=performance.now();if(k==='ears'){const id=-(Date.now());w.postMessage({type:'run',id,audio:new Float32Array(8000)})}else if(k==='voice'){const id=++nid;pend[id]=()=>{(T.warmMs||(T.warmMs={}))[k]=Math.round(performance.now()-t0)};w.postMessage({type:'say',text:'Hi.',id})}};go();if(k==='ears')setInterval(()=>{if(document.visibilityState==='visible'&&st==='idle')go()},120000)}
+document.addEventListener('click',async e=>{if(!e.target||e.target.id!=='cl')return;e.stopPropagation();const txt=VERSION+' '+navigator.userAgent+'\nalarm: '+(T.alarm||'none')+'\nlatency eos->audio ms: '+JSON.stringify(T.eosToAudioMs||[])+'\nerrors: '+JSON.stringify(T.errors.slice(-8))+'\n'+T.diag.join('\n');let okc=false;try{await navigator.clipboard.writeText(txt);okc=true}catch{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();try{okc=document.execCommand('copy')}catch{}ta.remove()}$('cl').textContent=okc?'COPIED':'COPY FAILED';setTimeout(()=>$('cl').textContent='COPY LOG',2000)},true);
+let msgFade=0;function status(msg){$('msg').textContent=msg||'';$('msg').className='';clearTimeout(msgFade);if(msg)msgFade=setTimeout(()=>$('msg').classList.add('fade'),4500);T.log.push(msg);if(msg)dlog('status',msg)}
+function fail(msg,detail){try{const c=/microphone|mic\b|can't hear you/i.test(msg)?'MIC BLOCKED':/voice/i.test(msg)?'VOICE FAILED':/mind|cloud|think/i.test(msg)?'BRAIN OFFLINE':/recogni|ears/i.test(msg)?'EARS FAILED':'ERROR';alarm(c,msg)}catch{}$('msg').textContent=msg;$('msg').className='err';T.errors.push(msg+(detail?' | '+detail:''));console.warn('FAIL '+msg,detail||'')}
 window.addEventListener('error',e=>fail('Something broke: '+(e.message||e.error||'unknown error'),e.filename+':'+e.lineno));
 window.addEventListener('unhandledrejection',e=>{const r=e.reason;if(r&&(r.name==='AbortError'||/abort/i.test(String(r.message||r)))){dlog('ignored abort',String(r.message||r));e.preventDefault&&e.preventDefault();return}fail('Something broke: '+(e.reason&&e.reason.message||e.reason))});
 $('ver').textContent=VERSION+(SAFE?' safe':'');
@@ -23,14 +28,15 @@ $('ver').onclick=()=>{let d=$('diag');if(!d){d=document.createElement('div');d.i
  $('dgc').onclick=async()=>{const txt=T.diag.join('\n');try{await navigator.clipboard.writeText(txt);$('dgc').textContent='Copied'}catch{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');$('dgc').textContent='Copied'}catch{}ta.remove()}}}
  d.classList.add('on');$('dgl').textContent=T.diag.join('\n');$('dgl').scrollTop=1e9};
 let quietT=0;const wake=()=>{document.body.classList.remove('quiet');clearTimeout(quietT);quietT=setTimeout(()=>document.body.classList.add('quiet'),6000)};['pointerdown','pointermove','keydown'].forEach(e=>addEventListener(e,wake));wake();
-let st='idle',level=0,handsFree=Q.get('hf')!=='0',caps=true,ac=null,micStream=null,turnId=0,sources=[],playT=0,mem={name:null,nameReason:null,facts:[],reflections:[],history:[],lastSeen:null};
-function setState(s){if(s!==st)dlog('state',s);st=s;$('state').textContent={idle:handsFree?'LISTENING · HANDS-FREE':'READY — TAP TALK',listening:'LISTENING — TAP TO STOP',thinking:'THINKING',speaking:'SPEAKING — TAP TO INTERRUPT'}[s]||s;$('talk').classList.toggle('on',s!=='idle');$('talk').textContent={idle:'TALK',listening:'STOP',thinking:'…',speaking:'STOP'}[s]||'TALK'}
+let FACE=null;try{if(new URLSearchParams(location.search).get('face')!=='0')FACE=createFace({log:(...a)=>dlog(...a)});window.__face=FACE}catch(e){dlog('face init failed',String(e))}
+let st='idle',level=0,handsFree=Q.get('hf')!=='0',caps=false,ac=null,micStream=null,turnId=0,sources=[],playT=0,mem={name:null,nameReason:null,facts:[],reflections:[],history:[],lastSeen:null};
+let stFade=0;function setState(s){if(s!==st){dlog('state',s);const e=$('state');e.classList.remove('fade');clearTimeout(stFade);stFade=setTimeout(()=>e.classList.add('fade'),s==='idle'?2500:4000)}st=s;try{FACE&&FACE.set(s)}catch{}$('state').textContent={idle:handsFree?'listening':'tap to talk',listening:'listening',thinking:'thinking',speaking:''}[s]||'';$('talk').classList.toggle('on',s!=='idle');document.body.dataset.st=s}
 // ---------- visual: cosmic neural mind (brain.js) ----------
-import { createBrain } from "./brain.js?v=9";
+import { createBrain } from "./brain.js?v=11";
 function createOrb(cv,getSt){const g=cv.getContext('2d');let lv=()=>0;const dpr=Math.min(2,devicePixelRatio||1);(function f(t){cv.width=innerWidth*dpr;cv.height=innerHeight*dpr;const x=cv.width/2,y=cv.height*.42,r=Math.min(cv.width,cv.height)*(.12+lv()*.15+(getSt()==='thinking'?.02*Math.sin(t/150):0));const gr=g.createRadialGradient(x,y,0,x,y,r*2.2);gr.addColorStop(0,'#e8fdff');gr.addColorStop(.25,'#5fe3ffcc');gr.addColorStop(1,'#0000');g.fillStyle='#02030a';g.fillRect(0,0,cv.width,cv.height);g.fillStyle=gr;g.fillRect(0,0,cv.width,cv.height);requestAnimationFrame(f)})(0);
  return {setGraph(){},ignite(){},think(){},hit(){return null},setLevel(f){lv=f}}}
 let mind;try{if(SAFE)throw new Error('safe mode');mind=createBrain($('cv'),()=>st);dlog('galaxy ok')}catch(e){dlog('galaxy off:',String(e));mind=createOrb($('cv'),()=>st)}mind.setLevel(()=>level);let voiceLvl=0;try{mind.setVoice&&mind.setVoice(()=>voiceLvl)}catch{}
-$('cv').addEventListener('click',e=>{if(st==='listening'&&hearing){forceEnd('orb tap');return}try{const n=mind.hit(e.clientX,e.clientY);if(n)T.tapped=n.label}catch(err){dlog('hit err',String(err))}});
+$('cv').addEventListener('click',e=>{if(!document.body.classList.contains('galaxy')){$('talk').click();return}if(st==='listening'&&hearing){forceEnd('orb tap');return}try{const n=mind.hit(e.clientX,e.clientY);if(n)T.tapped=n.label}catch(err){dlog('hit err',String(err))}});
 
 // ---------- loading state ----------
 const prog={brain:0,ears:0,voice:0};const ok={brain:null,ears:null,voice:null};// null=loading,true,false
@@ -128,8 +134,8 @@ const cloud={name:'cloud',interrupt:()=>{try{cloudCtl&&cloudCtl.abort()}catch{}}
 let usingLocal=false;const allowLocal=Q.get('local')==='1';
 async function* think(msgs,max,temp,bg){
  if(cloudOn&&Date.now()>cloudDownUntil){let got=false;const t0=performance.now();
-  try{for await(const t of cloud.gen(msgs,max,temp,bg)){if(!got){got=true;T.cloudFirstMs=(T.cloudFirstMs||[]);if(!bg)T.cloudFirstMs.push(Math.round(performance.now()-t0))}usingLocal=false;yield t}T.cloudOk=(T.cloudOk||0)+1;return}
-  catch(e){if(got)return;if(bg)throw e;T.cloudFails=(T.cloudFails||0)+1;dlog('cloud failed all',String(e&&e.message),(T.cloudErr||[]).slice(-6).join(' | '));if(!bg)status(allowLocal?'Cloud minds unreachable — using my on-device mind for now…':'Cloud minds unreachable — check your connection.')}}
+  try{for await(const t of cloud.gen(msgs,max,temp,bg)){if(!got){got=true;T.cloudFirstMs=(T.cloudFirstMs||[]);if(!bg)T.cloudFirstMs.push(Math.round(performance.now()-t0))}usingLocal=false;if(T.alarm==='BRAIN OFFLINE')alarm('');yield t}T.cloudOk=(T.cloudOk||0)+1;return}
+  catch(e){if(got)return;if(bg)throw e;T.cloudFails=(T.cloudFails||0)+1;alarm('BRAIN OFFLINE','could not reach the free AI servers. Check internet, wait a minute, try again.');dlog('cloud failed all',String(e&&e.message),(T.cloudErr||[]).slice(-6).join(' | '));if(!bg)status(allowLocal?'Cloud minds unreachable — using my on-device mind for now…':'Cloud minds unreachable — check your connection.')}}
  if(!allowLocal){if(bg)return;dlog('all cloud minds failed; no local mind on this device');yield ["Hm, I lost my thread for a second. Say that again?","Sorry, my thoughts scattered just then. One more time?","Wait, I drifted off. What did you say?"][Math.floor(Math.random()*3)];return}
  if(bg&&!local)return;// don't download the local model just for memory chores
  usingLocal=true;if(!bg&&msgs[0]&&msgs[0].role==='system')msgs=[{role:'system',content:sys()},...msgs.slice(1)];if(!local){status(`Loading my on-device mind${pct('brain')?' ('+pct('brain')+'%)':''}…`)}
@@ -142,11 +148,11 @@ if(cloudOn){need.brain=false;ok.brain=true;prog.brain=1;refreshLLM7()}else ensur
 // ---------- workers (ears + voice) ----------
 function mkWorker(file,k){let w;try{w=new Worker(file,{type:'module'})}catch(e){ok[k]=false;fail(`Could not start ${k} worker: ${e}`);return null}
  w.addEventListener('error',e=>{if(ok[k]===null){ok[k]=false;prog[k]=1}fail(`${k==='voice'?'Voice':'Ears'} worker crashed${k==='voice'?' — using the built-in iPhone/browser voice instead':''}.`,e.message)});
- w.addEventListener('message',e=>{const m=e.data;if(m.type==='progress'&&m.p&&m.p.progress!=null)prog[k]=m.p.progress/100;if(m.type==='ready'){ok[k]=true;prog[k]=1;T[k]=m.device}if(m.type==='error'){ok[k]=false;prog[k]=1;fail(k==='voice'?'Natural voice failed to load — using the built-in voice.':'Speech recognizer failed to load.',m.error)}});return w}
+ w.addEventListener('message',e=>{const m=e.data;if(m.type==='progress'&&m.p&&m.p.progress!=null)prog[k]=m.p.progress/100;if(m.type==='ready'){ok[k]=true;prog[k]=1;T[k]=m.device;warmWorker(k,w)}if(m.type==='error'){ok[k]=false;prog[k]=1;fail(k==='voice'?'Natural voice failed to load — using the built-in voice.':'Speech recognizer failed to load.',m.error)}});return w}
 const wantGPUworkers=gpuOK&&!mobile;
 const voiceMode=Q.get('voice')||(SAFE?'native':'kokoro');T.voiceMode=voiceMode;dlog('voice mode',voiceMode,'ears',earsMode);
-let ttsW=null;if(voiceMode==='kokoro'){ttsW=mkWorker('tts-worker.js?v=9','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers})}else{need.voice=false;ok.voice=false;prog.voice=1}
-let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=9','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers,model:Q.get('asr')||(mobile?'onnx-community/whisper-tiny.en':'onnx-community/whisper-base.en')})}
+let ttsW=null;if(voiceMode==='kokoro'){ttsW=mkWorker('tts-worker.js?v=11','voice');ttsW&&ttsW.postMessage({type:'init',webgpu:wantGPUworkers})}else{need.voice=false;ok.voice=false;prog.voice=1}
+let sttW=null;if(need.ears){sttW=mkWorker('stt-worker.js?v=11','ears');sttW&&sttW.postMessage({type:'init',webgpu:wantGPUworkers,model:Q.get('asr')||(mobile?'onnx-community/whisper-tiny.en':'onnx-community/whisper-base.en')})}
 
 // ---------- persona + growing memory ----------
 const SEED=['Joseph runs Red Line Hockey Co., selling hockey digital products and hats','Joseph plays for and runs the Three Mile Islanders hockey team and its Facebook page','Joseph lives in the America/New_York time zone'];
@@ -260,7 +266,7 @@ async function exportMem(){const txt=JSON.stringify({companion:'voice-companion'
   $('exx').onclick=()=>d.classList.remove('on');$('exc').onclick=async()=>{const ta=$('ext');try{await navigator.clipboard.writeText(ta.value)}catch{ta.select();try{document.execCommand('copy')}catch{}}$('exc').textContent='Copied'}}
  $('ext').value=txt;d.classList.add('on')}
 async function importMem(file){try{const j=JSON.parse(await file.text());const m=j.mem||j;if(!m||!Array.isArray(m.history))throw new Error('not a memory file');mem=migrate(m);await save(mem);$('name').textContent=mem.name||'◦';status(`Memory restored${mem.name?' — '+mem.name+' remembers':''}: ${mem.facts.length} facts, ${mem.history.length/2|0} exchanges.`);T.imported=true}catch(e){fail('That file is not a memory backup: '+e.message)}}
-$('mm').onclick=()=>$('mp').classList.toggle('on');$('mx').onclick=()=>{exportMem();$('mp').classList.remove('on')};$('mi').onclick=()=>$('mf').click();$('mf').onchange=e=>{const f=e.target.files[0];if(f)importMem(f);e.target.value='';$('mp').classList.remove('on')};
+$('mm').onclick=()=>$('mp').classList.toggle('on');const openG=o=>{document.body.classList.toggle('galaxy',o);$('panel').setAttribute('aria-hidden',o?'false':'true');dlog('memory panel',o?'open':'closed')};$('memb').onclick=e=>{e.stopPropagation();openG(true)};$('pclose').onclick=e=>{e.stopPropagation();openG(false)};$('mx').onclick=()=>{exportMem();$('mp').classList.remove('on')};$('mi').onclick=()=>$('mf').click();$('mf').onchange=e=>{const f=e.target.files[0];if(f)importMem(f);e.target.value='';$('mp').classList.remove('on')};
 // ---------- speech out ----------
 let ttsQ=Promise.resolve(),pend={},nid=0;
 ttsW&&ttsW.addEventListener('message',e=>{if(e.data.type==='audio'&&pend[e.data.id]){pend[e.data.id](e.data);delete pend[e.data.id]}});
@@ -272,12 +278,18 @@ function browserSay(text,tid){return new Promise(r=>{if(T.eos){(T.eosToAudioMs||
  u.onend=()=>fin('end');u.onerror=e=>fin('error '+(e&&e.error));u.onstart=()=>{T.ttsStarted=(T.ttsStarted||0)+1};lvlFake(u);
  try{speechSynthesis.resume()}catch{}speechSynthesis.speak(u)})}
 function lvlFake(u){let on=true;u.addEventListener('end',()=>{on=false;level=0});(function f(){if(!on)return;level=st==='speaking'?.12+Math.random()*.18:0;setTimeout(f,90)})()}
-let sayPending=0;function speak(text,tid){if(!text)return;if(lastAsk&&lastAsk.tid===tid)lastAsk.voiced=true;sayPending++;
+let sayPending=0,firstOfTurn=-1;
+// v10 fast start: the first short phrase of a turn goes out on the built-in voice if Kokoro is measured slow on this device;
+// every later chunk is sent to Kokoro immediately (in parallel) so it is ready when the first phrase ends.
+function kokoroSlow(){const w=T.warmMs&&T.warmMs.voice,l=(T.ttsShortMs||[]).slice(-3);const m=l.length?l.reduce((a,b)=>a+b)/l.length:w;return Q.get('fast')==='0'?false:Q.get('fast')==='1'?true:!(m&&m<900)}
+function kokoroReq(text){const k0=performance.now();return new Promise(r=>{const id=++nid;pend[id]=d=>{d.ms=Math.round(performance.now()-k0);r(d)};ttsW.postMessage({type:'say',text,id});setTimeout(()=>{if(pend[id]){delete pend[id];r({error:'timeout'})}},30000)})}
+function speak(text,tid){if(!text)return;if(lastAsk&&lastAsk.tid===tid)lastAsk.voiced=true;sayPending++;
+ const first=firstOfTurn!==tid;firstOfTurn=tid;const useK=ok.voice===true&&ttsW;const quick=first&&useK&&'speechSynthesis' in window&&kokoroSlow();
+ const kp=useK&&!quick?kokoroReq(text):null;if(quick)T.quickStarts=(T.quickStarts||0)+1;
  ttsQ=ttsQ.then(async()=>{try{if(tid!==turnId)return;
-  if(ok.voice===true&&ttsW){const k0=performance.now();const d=await new Promise(r=>{const id=++nid;pend[id]=r;ttsW.postMessage({type:'say',text,id});setTimeout(()=>{if(pend[id]){delete pend[id];r({error:'timeout'})}},30000)});
-   if(tid!==turnId)return;if(d.audio&&d.audio.length){(T.ttsMs||(T.ttsMs=[])).push(Math.round(performance.now()-k0));play(d.audio,d.sr,text);return}fail('Natural voice hiccuped — using the built-in voice.',d.error)}
+  if(kp){const d=await kp;if(tid!==turnId)return;if(d.audio&&d.audio.length){(T.ttsMs||(T.ttsMs=[])).push(d.ms);if(text.split(/\s+/).length<=7)(T.ttsShortMs||(T.ttsShortMs=[])).push(d.ms);play(d.audio,d.sr,text);return}alarm('VOICE FAILED','natural voice errored ('+String(d.error).slice(0,40)+'); using the built-in voice');T.voiceFails=(T.voiceFails||0)+1}
   await browserSay(text,tid)}finally{sayPending--}})}
-function play(f,sr,text){if(T.eos){(T.eosToAudioMs||(T.eosToAudioMs=[])).push(Math.round(performance.now()-T.eos));T.eos=0}if(ac.state!=='running')ac.resume().catch(()=>{});const b=ac.createBuffer(1,f.length,sr);b.copyToChannel(f,0);const s=ac.createBufferSource();s.buffer=b;const an=ac.createAnalyser();s.connect(an);an.connect(ac.destination);playT=Math.max(playT,ac.currentTime+.05);s.start(playT);playT+=b.duration;sources.push(s);setState('speaking');T.spoken.push({engine:'kokoro',text,seconds:b.duration});
+function play(f,sr,text){if(T.eos){(T.eosToAudioMs||(T.eosToAudioMs=[])).push(Math.round(performance.now()-T.eos));T.eos=0}if(ac.state!=='running')ac.resume().catch(()=>{});const b=ac.createBuffer(1,f.length,sr);b.copyToChannel(f,0);const s=ac.createBufferSource();s.buffer=b;const an=ac.createAnalyser();an.fftSize=1024;an.smoothingTimeConstant=.3;an.__live=true;window.__faceAn=an;s.connect(an);an.connect(ac.destination);playT=Math.max(playT,ac.currentTime+.05);s.start(playT);playT+=b.duration;sources.push(s);setState('speaking');T.spoken.push({engine:'kokoro',text,seconds:b.duration});
  const arr=new Uint8Array(256);(function m(){if(!sources.includes(s))return;an.getByteTimeDomainData(arr);let x=0;for(const v of arr)x=Math.max(x,Math.abs(v-128));level=x/400;voiceLvl=Math.min(1,x/90);requestAnimationFrame(m)})();
  s.onended=()=>{sources=sources.filter(q=>q!==s);if(!sources.length&&st==='speaking'&&!thinkingNow)afterSpeak()}}
 function afterSpeak(){herEnd=Date.now();setState('idle');if(handsFree){autoStart=true;setTimeout(()=>{if(st==='idle')startListening()},iosEars?350:0)}}
@@ -295,7 +307,7 @@ let lastAsk=null;async function respond(text){if(iosEars){try{rec&&recOn&&rec.ab
  if((!cloudOn||Date.now()<cloudDownUntil)&&!local)speak(cloudOn?"Hang on, my connection to my main mind dropped. Waking up my backup.":"One sec, I'm still waking up.",tid);
  const msgs=[{role:'system',content:sys()+(fresh?`\nYou chose the name ${mem.name} just now, on your own. In this reply, say your name is ${mem.name} and briefly why it feels right.`:'')},...mem.history.slice(-12).map(h=>({role:h.role,content:h.content})),{role:'user',content:text}];
  let full='',pendTxt='',hold=false,said=false,first=false;const tStart=performance.now();const emit=s=>{s=deAssist(s.trim());if(!s||tid!==turnId)return;if(!first){first=true;(T.firstSpeechMs||(T.firstSpeechMs=[])).push(Math.round(performance.now()-tStart))}if(caps)$('her').textContent=s;speak(s,tid)};
- try{for await(const t of brain.gen(msgs,usingLocal?110:110,.75)){if(tid!==turnId)break;full+=t;pendTxt+=t;pendTxt=pendTxt.replace(/<think>[\s\S]*?<\/think>/g,'');if(pendTxt.includes('<think>'))continue;if(/\[\[|\[\s*NAME/i.test(pendTxt))hold=true;if(hold)continue;let m;while((m=pendTxt.match(/^([\s\S]+?[.!?…])\s+/))||(!said&&(m=pendTxt.match(/^([\s\S]{20,}?[,;:—])\s+/)))){said=true;emit(m[1]);pendTxt=pendTxt.slice(m[0].length)}}}
+ try{for await(const t of brain.gen(msgs,usingLocal?110:110,.75)){if(tid!==turnId)break;full+=t;pendTxt+=t;pendTxt=pendTxt.replace(/<think>[\s\S]*?<\/think>/g,'');if(pendTxt.includes('<think>'))continue;if(/\[\[|\[\s*NAME/i.test(pendTxt))hold=true;if(hold)continue;let m;while((m=pendTxt.match(/^([\s\S]+?[.!?…])\s+/))||(!said&&(m=pendTxt.match(/^([\s\S]{12,}?[,;:—])\s+/)||(m=pendTxt.match(/^((?:\S+\s+){4,5}\S+?)(?=\s)\s*/))))){said=true;emit(m[1]);pendTxt=pendTxt.slice(m[0].length)}}}
  catch(e){fail('My thinking was interrupted: '+String(e&&e.message||e).slice(0,100),String(e))}finally{busy=false;thinkingNow=false;const _t=turnId;setTimeout(()=>{if(_t===turnId&&sayPending===0&&!sources.length&&!speechSynthesis.speaking&&st==='speaking')afterSpeak()},120)}
  full=full.replace(/<think>[\s\S]*?<\/think>/g,'');emit(pendTxt.replace(/\[\[?\s*NAME[\s\S]*$|\[\[[\s\S]*?(\]\]|$)/gi,'').replace(/<\/?think>/g,''));
  const clean=deAssist(full.replace(/\[\[?\s*NAME[^\]]*\]?\]?|\[\[[\s\S]*?\]\]/gi,'').trim());T.replies.push(clean);
@@ -344,7 +356,7 @@ let micDenied=false,gestureNow=false;function openMic(){if(micDenied&&!gestureNo
 function ensureVAD(){if(vadP)return vadP;vadP=(async()=>{if(!window.vad||!window.vad.MicVAD)throw new Error('voice-activity library did not load');
  const base='https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/';
  vad=await window.vad.MicVAD.new({baseAssetPath:base,onnxWASMBasePath:'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/',model:'v5',startOnLoad:false,submitUserSpeechOnPause:true,
-  redemptionMs:700,minSpeechMs:300,preSpeechPadMs:250,positiveSpeechThreshold:.6,negativeSpeechThreshold:+(Q.get('neg')||.4),
+  redemptionMs:+(Q.get('redms')||600),minSpeechMs:300,preSpeechPadMs:250,positiveSpeechThreshold:.6,negativeSpeechThreshold:+(Q.get('neg')||.4),
   getStream:async()=>micStream||(micStream=await openMic()),
   pauseStream:async()=>{},resumeStream:async s=>s,
   onFrameProcessed:(p,f)=>{if(st!=='speaking')level=p.isSpeech*.15;onFrame(p,f)},
@@ -359,7 +371,7 @@ async function endTurn(audio){hearing=false;segBuf=[];lastHeard=Date.now();let e
    dlog('heard',JSON.stringify(t.slice(0,60)),'asr',Math.round(performance.now()-T.eos)+'ms');if(goodText(t)){status('');respond(t)}else{status("I didn't catch that — tap TALK and try again.");setState('idle');if(handsFree)startListening()}}
 // v8: energy end-of-speech fallback, max utterance, frame watchdog — never rely only on Silero
 const E={frames:0,last:0,floor:.004,rms:0,peak:0,stalls:0,rebuilds:0};let hearT0=0,lastLoud=0,segBuf=[],preBuf=[];T.E=E;
-const SIL_MS=+(Q.get('silms')||850),MAX_UTT=+(Q.get('maxutt')||12000);
+const SIL_MS=+(Q.get('silms')||600),MAX_UTT=+(Q.get('maxutt')||12000);
 function vadSR(){try{return vad&&vad._audioContext?vad._audioContext.sampleRate:(vad&&vad.audioContext&&vad.audioContext.sampleRate)||'?'}catch{return '?'}}
 function vadCtx(){try{const c=vad&&(vad._audioContext||vad.audioContext);return c?c.state:'?'}catch{return '?'}}
 function onFrame(p,f){const now=Date.now();E.frames++;E.last=now;if(!f||!f.length)return;let e=0;for(let i=0;i<f.length;i++)e+=f[i]*f[i];const r=Math.sqrt(e/f.length);E.rms=r;if(r>E.peak)E.peak=r;
@@ -371,7 +383,7 @@ function forceEnd(why){if(!hearing)return;const n=segBuf.reduce((a,b)=>a+b.lengt
  dlog('forced end of speech:',why,'frames',segBuf.length);T.forced=(T.forced||0)+1;try{vad&&vad.frameProcessor&&vad.frameProcessor.reset()}catch{}
  if(n<16000*.25){hearing=false;segBuf=[];dlog('forced segment too short, dropped');if(st==='listening')status('');return}endTurn(a)}
 let lastStat=0;setInterval(async()=>{if(!vad||!vadOn)return;const now=Date.now();
- if(now-lastStat>10000){lastStat=now;dlog('mic stats frames',E.frames,'rms',E.rms.toFixed(4),'peak10s',E.peak.toFixed(4),'sr',vadSR(),'floor',E.floor.toFixed(4),'ctx',vadCtx(),'st',st);E.peak=0}
+ if(now-lastStat>10000){if(st==='listening'&&E.peak<.0015){alarm('NO SOUND HEARD','the mic is on but only silence is coming in. Check the mic is not muted or used by another app.')}else if(T.alarm==='NO SOUND HEARD'&&E.peak>.004)alarm('');lastStat=now;dlog('mic stats frames',E.frames,'rms',E.rms.toFixed(4),'peak10s',E.peak.toFixed(4),'sr',vadSR(),'floor',E.floor.toFixed(4),'ctx',vadCtx(),'st',st);E.peak=0}
  if(hearing&&now-hearT0>MAX_UTT+1000)forceEnd('hearing timeout');
  if(now-E.last>1500&&E.last){E.stalls++;dlog('no audio frames for',now-E.last,'ms ctx',vadCtx(),'track',micStream?micStream.getAudioTracks().map(t=>t.readyState).join():'none');
   if(hearing)forceEnd('frames stopped');
@@ -408,7 +420,7 @@ $('talk').onclick=()=>{gestureNow=true;setTimeout(()=>gestureNow=false,1500);if(
  if(st==='speaking'||st==='thinking'){stopPlay();setState('idle');if(!handsFree)return}
  stopPlay();startListening()};
 $('hf').onclick=()=>{if(!begun)unlock();handsFree=!handsFree;$('hf').classList.toggle('on',handsFree);if(handsFree){status(isIOS&&earsMode==='web'?'Hands-free on. (On iPhone I re-listen after each reply.)':'Hands-free on.');startListening()}else{stopListening();setState('idle')}};
-$('cc').onclick=()=>{caps=!caps;$('cc').classList.toggle('on',caps);if(!caps)$('you').textContent=$('her').textContent=''};$('cc').classList.add('on');$('hf').classList.toggle('on',handsFree);
+$('cc').onclick=()=>{caps=!caps;$('cc').classList.toggle('on',caps);if(!caps)$('you').textContent=$('her').textContent=''};$('hf').classList.toggle('on',handsFree);
 // boot overlay: show BEGIN immediately — never block on downloads
 $('bt').textContent=mem.name?mem.name.toUpperCase()+' IS WAKING':'WAKING UP';$('go').style.display='block';$('bs').textContent=isIOS?'First visit downloads about 450 MB — use Wi-Fi.':'First visit downloads the models — use Wi-Fi.';
 T.respond=respond;T.sys=()=>sys();T.grow=grow;T.mem=()=>mem;T.ready=true;
